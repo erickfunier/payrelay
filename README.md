@@ -2,6 +2,17 @@
 
 PayRelay is a portfolio-quality **fictional payment-event webhook delivery service**. It creates mock payment events and sends signed webhook notifications to merchant endpoints. It is deliberately not a payment processor: it cannot charge a card, integrate with payment providers, or accept/store card data.
 
+## Development workflow
+
+This public repository uses a two-stage Git flow:
+
+- `master` is the protected release branch and always represents the latest releasable version.
+- `develop` is the integration branch for the next release.
+- Work starts from `develop` on a short-lived branch and returns to `develop` through a pull request.
+- Releases are pull requests from `develop` into `master`.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for branch names, review expectations, and the release process.
+
 ## What Phase 1 delivers
 
 - Create merchant webhook endpoints, each with a generated signing secret.
