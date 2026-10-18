@@ -1,0 +1,15 @@
+services:
+  payrelay:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      PAYRELAY_ADDR: ":8080"
+      PAYRELAY_DB_PATH: /data/payrelay.db
+      PAYRELAY_WORKER_POLL: 500ms
+      PAYRELAY_MAX_ATTEMPTS: "5"
+    volumes:
+      - payrelay-data:/data
+
+volumes:
+  payrelay-data:
