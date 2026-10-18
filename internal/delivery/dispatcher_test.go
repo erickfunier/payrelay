@@ -2,11 +2,13 @@ package delivery_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -84,6 +86,64 @@ func TestDispatcherRetriesFailureThenMarksFailed(t *testing.T) {
 		t.Fatalf("unexpected attempts: %#v (%v)", attempts, err)
 	}
 }
+
+func TestDispatcherRecordsNetworkAndRequestConstructionFailures(t *testing.T) {
+	repo := testStore(t)
+	defer repo.Close()
+	ctx := context.Background()
+
+	networkEndpoint := domain.Endpoint{ID: "we_network", URL: "https://receiver.test", Secret: "whsec_network", Active: true, CreatedAt: time.Now().UTC()}
+	if err := repo.CreateEndpoint(ctx, networkEndpoint); err != nil {
+		t.Fatal(err)
+	}
+	networkEvent := domain.PaymentEvent{ID: "evt_network", Type: "payment.failed", MerchantRef: "order_network", AmountCents: 100, Currency: "USD", Status: "failed", OccurredAt: time.Now().UTC()}
+	if _, _, err := repo.CreateEvent(ctx, networkEvent, "network", []domain.Endpoint{networkEndpoint}); err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("offline")
+	})}
+	dispatcher := delivery.NewDispatcher(repo, client, 1, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if _, err := dispatcher.DispatchOne(ctx); err != nil {
+		t.Fatal(err)
+	}
+	deliveries, err := repo.ListDeliveries(ctx, networkEvent.ID)
+	if err != nil || deliveries[0].Status != "failed" || !strings.Contains(deliveries[0].LastError, "offline") {
+		t.Fatalf("network delivery: %#v (%v)", deliveries, err)
+	}
+
+	invalidEndpoint := domain.Endpoint{ID: "we_invalid", URL: ":// invalid", Secret: "whsec_invalid", Active: true, CreatedAt: time.Now().UTC()}
+	if err := repo.CreateEndpoint(ctx, invalidEndpoint); err != nil {
+		t.Fatal(err)
+	}
+	invalidEvent := domain.PaymentEvent{ID: "evt_invalid", Type: "payment.failed", MerchantRef: "order_invalid", AmountCents: 100, Currency: "USD", Status: "failed", OccurredAt: time.Now().UTC()}
+	if _, _, err := repo.CreateEvent(ctx, invalidEvent, "invalid", []domain.Endpoint{invalidEndpoint}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := dispatcher.DispatchOne(ctx); err != nil {
+		t.Fatal(err)
+	}
+	deliveries, err = repo.ListDeliveries(ctx, invalidEvent.ID)
+	if err != nil || deliveries[0].Status != "failed" || deliveries[0].LastError == "" {
+		t.Fatalf("invalid URL delivery: %#v (%v)", deliveries, err)
+	}
+}
+
+func TestDispatchWithNoWorkAndStoppedWorker(t *testing.T) {
+	repo := testStore(t)
+	defer repo.Close()
+	dispatcher := delivery.NewDispatcher(repo, http.DefaultClient, 1, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if found, err := dispatcher.DispatchOne(context.Background()); err != nil || found {
+		t.Fatalf("empty dispatch: found=%v err=%v", found, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	delivery.RunWorker(ctx, dispatcher, time.Millisecond, slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }
 
 func testStore(t *testing.T) *store.Store {
 	t.Helper()
