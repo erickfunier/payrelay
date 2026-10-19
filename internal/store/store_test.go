@@ -10,7 +10,7 @@ import (
 	"github.com/example/payrelay/internal/domain"
 )
 
-func TestCreateEventHonorsIdempotencyKey(t *testing.T) {
+func TestStore_GivenRepeatedIdempotencyKey_WhenCreatingEvent_ThenReturnsOriginalOrConflict(t *testing.T) {
 	repo, err := Open(filepath.Join(t.TempDir(), "payrelay.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -37,7 +37,7 @@ func TestCreateEventHonorsIdempotencyKey(t *testing.T) {
 	}
 }
 
-func TestDeliveryLifecyclePersistsHistoryAndReplay(t *testing.T) {
+func TestStore_GivenDeliveryLifecycle_WhenAttemptsAreRecorded_ThenPersistsHistoryAndReplay(t *testing.T) {
 	repo, err := Open(filepath.Join(t.TempDir(), "payrelay.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -125,7 +125,7 @@ func TestDeliveryLifecyclePersistsHistoryAndReplay(t *testing.T) {
 	}
 }
 
-func TestStoreHelpers(t *testing.T) {
+func TestStore_GivenHelperInputs_WhenNormalized_ThenReturnsExpectedValues(t *testing.T) {
 	if boolInt(true) != 1 || boolInt(false) != 0 {
 		t.Fatal("bool conversion is incorrect")
 	}

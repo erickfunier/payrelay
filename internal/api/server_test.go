@@ -16,7 +16,7 @@ import (
 	"github.com/example/payrelay/internal/store"
 )
 
-func TestEventLifecycleThroughHTTP(t *testing.T) {
+func TestAPI_GivenRegisteredEndpoint_WhenEventIsCreatedAndDispatched_ThenPersistsDeliveryHistory(t *testing.T) {
 	var receivedEventID string
 	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedEventID = r.Header.Get("X-PayRelay-Event-ID")
@@ -104,7 +104,7 @@ func TestEventLifecycleThroughHTTP(t *testing.T) {
 	}
 }
 
-func TestFailedDeliveryCanBeReplayedThroughHTTP(t *testing.T) {
+func TestAPI_GivenFailedDelivery_WhenReplayed_ThenQueuesDeliveryAgain(t *testing.T) {
 	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 	}))
@@ -136,42 +136,42 @@ func TestFailedDeliveryCanBeReplayedThroughHTTP(t *testing.T) {
 	}
 }
 
-func TestAPIValidationAndNotFoundResponses(t *testing.T) {
+func TestAPI_GivenHealthCheck_WhenRequested_ThenReturnsOK(t *testing.T) {
 	handler, _ := testServer(t)
 	if response := request(t, handler, http.MethodGet, "/healthz", "", nil); response.Code != http.StatusOK {
 		t.Fatalf("health: got %d", response.Code)
 	}
-	for _, body := range []string{
-		`{"url":"file:///tmp/receiver"}`,
-		`{"url":""}`,
-		`{"url":1}`,
-	} {
-		if response := request(t, handler, http.MethodPost, "/v1/endpoints", body, nil); response.Code != http.StatusBadRequest {
-			t.Fatalf("endpoint validation for %s: got %d", body, response.Code)
-		}
+}
+
+func TestAPI_GivenInvalidRequest_WhenHandled_ThenReturnsExpectedClientError(t *testing.T) {
+	handler, _ := testServer(t)
+	cases := []struct {
+		name   string
+		method string
+		path   string
+		body   string
+		want   int
+	}{
+		{name: "given_file_endpoint_url_when_creating_endpoint_then_returns_bad_request", method: http.MethodPost, path: "/v1/endpoints", body: `{"url":"file:///tmp/receiver"}`, want: http.StatusBadRequest},
+		{name: "given_empty_endpoint_url_when_creating_endpoint_then_returns_bad_request", method: http.MethodPost, path: "/v1/endpoints", body: `{"url":""}`, want: http.StatusBadRequest},
+		{name: "given_wrong_endpoint_url_type_when_creating_endpoint_then_returns_bad_request", method: http.MethodPost, path: "/v1/endpoints", body: `{"url":1}`, want: http.StatusBadRequest},
+		{name: "given_missing_event_fields_when_creating_event_then_returns_bad_request", method: http.MethodPost, path: "/v1/events", body: `{}`, want: http.StatusBadRequest},
+		{name: "given_non_payment_event_type_when_creating_event_then_returns_bad_request", method: http.MethodPost, path: "/v1/events", body: `{"type":"invoice.created","merchant_reference":"o","amount_cents":1,"currency":"USD","status":"created"}`, want: http.StatusBadRequest},
+		{name: "given_non_positive_amount_when_creating_event_then_returns_bad_request", method: http.MethodPost, path: "/v1/events", body: `{"type":"payment.succeeded","merchant_reference":"o","amount_cents":0,"currency":"USD","status":"succeeded"}`, want: http.StatusBadRequest},
+		{name: "given_invalid_currency_when_creating_event_then_returns_bad_request", method: http.MethodPost, path: "/v1/events", body: `{"type":"payment.succeeded","merchant_reference":"o","amount_cents":1,"currency":"US","status":"succeeded"}`, want: http.StatusBadRequest},
+		{name: "given_unknown_event_field_when_creating_event_then_returns_bad_request", method: http.MethodPost, path: "/v1/events", body: `{"type":"payment.succeeded","merchant_reference":"o","amount_cents":1,"currency":"USD","status":"succeeded","unexpected":true}`, want: http.StatusBadRequest},
+		{name: "given_missing_event_when_reading_event_then_returns_not_found", method: http.MethodGet, path: "/v1/events/evt_missing", want: http.StatusNotFound},
+		{name: "given_missing_event_when_listing_deliveries_then_returns_not_found", method: http.MethodGet, path: "/v1/events/evt_missing/deliveries", want: http.StatusNotFound},
+		{name: "given_missing_delivery_when_replaying_then_returns_conflict", method: http.MethodPost, path: "/v1/deliveries/dlv_missing/replay", want: http.StatusConflict},
+		{name: "given_missing_delivery_when_listing_attempts_then_returns_empty_result", method: http.MethodGet, path: "/v1/deliveries/dlv_missing/attempts", want: http.StatusOK},
 	}
-	for _, body := range []string{
-		`{}`,
-		`{"type":"invoice.created","merchant_reference":"o","amount_cents":1,"currency":"USD","status":"created"}`,
-		`{"type":"payment.succeeded","merchant_reference":"o","amount_cents":0,"currency":"USD","status":"succeeded"}`,
-		`{"type":"payment.succeeded","merchant_reference":"o","amount_cents":1,"currency":"US","status":"succeeded"}`,
-		`{"type":"payment.succeeded","merchant_reference":"o","amount_cents":1,"currency":"USD","status":"succeeded","unexpected":true}`,
-	} {
-		if response := request(t, handler, http.MethodPost, "/v1/events", body, nil); response.Code != http.StatusBadRequest {
-			t.Fatalf("event validation for %s: got %d", body, response.Code)
-		}
-	}
-	if response := request(t, handler, http.MethodGet, "/v1/events/evt_missing", "", nil); response.Code != http.StatusNotFound {
-		t.Fatalf("missing event: got %d", response.Code)
-	}
-	if response := request(t, handler, http.MethodGet, "/v1/events/evt_missing/deliveries", "", nil); response.Code != http.StatusNotFound {
-		t.Fatalf("missing deliveries: got %d", response.Code)
-	}
-	if response := request(t, handler, http.MethodPost, "/v1/deliveries/dlv_missing/replay", "", nil); response.Code != http.StatusConflict {
-		t.Fatalf("missing replay: got %d", response.Code)
-	}
-	if response := request(t, handler, http.MethodGet, "/v1/deliveries/dlv_missing/attempts", "", nil); response.Code != http.StatusOK {
-		t.Fatalf("missing delivery attempts: got %d", response.Code)
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			response := request(t, handler, tt.method, tt.path, tt.body, nil)
+			if response.Code != tt.want {
+				t.Fatalf("got %d, want %d: %s", response.Code, tt.want, response.Body.String())
+			}
+		})
 	}
 }
 

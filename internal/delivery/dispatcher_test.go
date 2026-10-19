@@ -17,7 +17,7 @@ import (
 	"github.com/example/payrelay/internal/store"
 )
 
-func TestDispatcherSendsSignedPayloadAndRecordsSuccess(t *testing.T) {
+func TestDispatcher_GivenSuccessfulReceiver_WhenDispatching_ThenSignsAndRecordsDelivery(t *testing.T) {
 	var observedSignature, observedTimestamp string
 	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -57,7 +57,7 @@ func TestDispatcherSendsSignedPayloadAndRecordsSuccess(t *testing.T) {
 	}
 }
 
-func TestDispatcherRetriesFailureThenMarksFailed(t *testing.T) {
+func TestDispatcher_GivenFinalReceiverFailure_WhenDispatching_ThenMarksDeliveryFailed(t *testing.T) {
 	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 	}))
@@ -87,7 +87,7 @@ func TestDispatcherRetriesFailureThenMarksFailed(t *testing.T) {
 	}
 }
 
-func TestDispatcherRecordsNetworkAndRequestConstructionFailures(t *testing.T) {
+func TestDispatcher_GivenTransportOrRequestFailure_WhenDispatching_ThenRecordsFailedDelivery(t *testing.T) {
 	repo := testStore(t)
 	defer repo.Close()
 	ctx := context.Background()
@@ -129,7 +129,7 @@ func TestDispatcherRecordsNetworkAndRequestConstructionFailures(t *testing.T) {
 	}
 }
 
-func TestDispatchWithNoWorkAndStoppedWorker(t *testing.T) {
+func TestDispatcher_GivenNoDueWork_WhenDispatchingOrStoppingWorker_ThenReturnsCleanly(t *testing.T) {
 	repo := testStore(t)
 	defer repo.Close()
 	dispatcher := delivery.NewDispatcher(repo, http.DefaultClient, 1, slog.New(slog.NewTextHandler(io.Discard, nil)))
