@@ -86,6 +86,12 @@ For a portfolio-ready, end-to-end walkthrough with curl payloads, expected HTTP 
 
 ## API examples
 
+### Interactive documentation and Postman
+
+After starting the server, open [http://localhost:8080/docs/](http://localhost:8080/docs/) for Swagger UI. It loads the versioned OpenAPI document served by the application and its **Try it out** controls call the local API directly.
+
+Import [`postman/PayRelay.postman_collection.json`](postman/PayRelay.postman_collection.json) into Postman to run the same local workflow with response assertions. The collection starts with the health check and persists created IDs as collection variables for the following requests.
+
 Register an endpoint (use a request-bin service or a local listener in development):
 
 ```sh

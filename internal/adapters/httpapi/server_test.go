@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/example/payrelay/internal/adapters/sqlite"
@@ -141,6 +142,46 @@ func TestAPI_GivenHealthCheck_WhenRequested_ThenReturnsOK(t *testing.T) {
 	handler, _ := testServer(t)
 	if response := request(t, handler, http.MethodGet, "/healthz", "", nil); response.Code != http.StatusOK {
 		t.Fatalf("health: got %d", response.Code)
+	}
+}
+
+func TestAPI_GivenDocumentation_WhenRequested_ThenServesSwaggerUIAndOpenAPIContract(t *testing.T) {
+	handler, _ := testServer(t)
+
+	tests := []struct {
+		name        string
+		path        string
+		contentType string
+		contains    string
+	}{
+		{
+			name:        "Given documentation route When Swagger UI is requested Then it returns HTML",
+			path:        "/docs/",
+			contentType: "text/html",
+			contains:    "swagger-ui",
+		},
+		{
+			name:        "Given documentation route When OpenAPI contract is requested Then it returns YAML",
+			path:        "/docs/openapi.yaml",
+			contentType: "text/plain",
+			contains:    "openapi: 3.0.3",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response := request(t, handler, http.MethodGet, tt.path, "", nil)
+
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+			}
+			if !strings.Contains(response.Header().Get("Content-Type"), tt.contentType) {
+				t.Fatalf("content type = %q, want it to contain %q", response.Header().Get("Content-Type"), tt.contentType)
+			}
+			if !strings.Contains(response.Body.String(), tt.contains) {
+				t.Fatalf("body = %q, want it to contain %q", response.Body.String(), tt.contains)
+			}
+		})
 	}
 }
 

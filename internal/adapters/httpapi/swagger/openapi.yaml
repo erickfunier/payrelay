@@ -1,0 +1,234 @@
+openapi: 3.0.3
+info:
+  title: PayRelay API
+  version: 1.0.0
+  description: Mock payment-event webhook delivery service. It never processes real payments or accepts card data.
+servers:
+  - url: /
+    description: The server hosting this Swagger UI instance
+paths:
+  /healthz:
+    get:
+      summary: Health check
+      responses:
+        '200':
+          description: Server is ready
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /v1/endpoints:
+    get:
+      summary: List active webhook endpoints
+      responses:
+        '200':
+          description: Active endpoints; signing secrets are omitted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EndpointList' }
+    post:
+      summary: Register a webhook endpoint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateEndpointRequest' }
+      responses:
+        '201':
+          description: Endpoint created. Store the returned secret safely; it is only returned here.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Endpoint' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+  /v1/events:
+    post:
+      summary: Create a mock payment event
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateEventRequest' }
+      responses:
+        '201':
+          description: Event created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreateEventResponse' }
+        '200':
+          description: Existing event returned for an identical idempotency key
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreateEventResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409':
+          description: Idempotency key was already used with different input
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+  /v1/events/{eventID}:
+    get:
+      summary: Get a mock event
+      parameters: [{ $ref: '#/components/parameters/EventID' }]
+      responses:
+        '200':
+          description: Event found
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaymentEvent' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/events/{eventID}/deliveries:
+    get:
+      summary: List delivery jobs for an event
+      parameters: [{ $ref: '#/components/parameters/EventID' }]
+      responses:
+        '200':
+          description: Delivery jobs
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DeliveryList' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/deliveries/{deliveryID}/attempts:
+    get:
+      summary: List attempts for a delivery
+      parameters: [{ $ref: '#/components/parameters/DeliveryID' }]
+      responses:
+        '200':
+          description: Delivery attempts
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AttemptList' }
+  /v1/deliveries/{deliveryID}/replay:
+    post:
+      summary: Queue a failed delivery for replay
+      parameters: [{ $ref: '#/components/parameters/DeliveryID' }]
+      responses:
+        '202':
+          description: Replay queued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReplayResponse' }
+        '409':
+          description: Delivery does not exist or is not failed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Repeating a key with identical input returns the original event; changed input returns 409.
+      schema: { type: string }
+      example: demo-order-1007
+    EventID:
+      name: eventID
+      in: path
+      required: true
+      schema: { type: string }
+      example: evt_2dbf9c5af20d
+    DeliveryID:
+      name: deliveryID
+      in: path
+      required: true
+      schema: { type: string }
+      example: dlv_a91ce2207b4e
+  responses:
+    BadRequest:
+      description: Request validation failed
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, example: ok }
+    CreateEndpointRequest:
+      type: object
+      required: [url]
+      properties:
+        url: { type: string, format: uri, example: http://localhost:9000/webhooks/payrelay }
+    Endpoint:
+      type: object
+      required: [id, url, active, created_at]
+      properties:
+        id: { type: string, example: we_84fa814a3d20 }
+        url: { type: string, format: uri }
+        secret: { type: string, description: Returned only when creating an endpoint., example: whsec_0b62d9c2e8 }
+        active: { type: boolean, example: true }
+        created_at: { type: string, format: date-time }
+    EndpointList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/Endpoint' } }
+    CreateEventRequest:
+      type: object
+      required: [type, merchant_reference, amount_cents, currency, status]
+      properties:
+        type: { type: string, example: payment.succeeded }
+        merchant_reference: { type: string, example: demo-order-1007 }
+        amount_cents: { type: integer, format: int64, minimum: 1, example: 2599 }
+        currency: { type: string, minLength: 3, maxLength: 3, example: USD }
+        status: { type: string, example: succeeded }
+    CreateEventResponse:
+      type: object
+      required: [event, idempotent_replay]
+      properties:
+        event: { $ref: '#/components/schemas/PaymentEvent' }
+        idempotent_replay: { type: boolean, example: false }
+    PaymentEvent:
+      type: object
+      required: [id, type, merchant_reference, amount_cents, currency, status, occurred_at]
+      properties:
+        id: { type: string, example: evt_2dbf9c5af20d }
+        type: { type: string, example: payment.succeeded }
+        merchant_reference: { type: string, example: demo-order-1007 }
+        amount_cents: { type: integer, format: int64, example: 2599 }
+        currency: { type: string, example: USD }
+        status: { type: string, example: succeeded }
+        occurred_at: { type: string, format: date-time }
+    Delivery:
+      type: object
+      properties:
+        id: { type: string, example: dlv_a91ce2207b4e }
+        event_id: { type: string, example: evt_2dbf9c5af20d }
+        endpoint_id: { type: string, example: we_84fa814a3d20 }
+        status: { type: string, enum: [pending, processing, succeeded, failed] }
+        attempt_count: { type: integer, example: 1 }
+        next_attempt_at: { type: string, format: date-time, nullable: true }
+        last_error: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    DeliveryList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/Delivery' } }
+    DeliveryAttempt:
+      type: object
+      properties:
+        id: { type: string }
+        delivery_id: { type: string }
+        attempt_number: { type: integer }
+        status_code: { type: integer, nullable: true }
+        error: { type: string, nullable: true }
+        duration_ms: { type: integer }
+        created_at: { type: string, format: date-time }
+    AttemptList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/DeliveryAttempt' } }
+    ReplayResponse:
+      type: object
+      properties:
+        status: { type: string, example: queued }
+    Error:
+      type: object
+      properties:
+        error: { type: string }

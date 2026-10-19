@@ -1,10 +1,12 @@
 package httpapi
 
 import (
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -15,6 +17,9 @@ import (
 	"github.com/example/payrelay/internal/core/domain"
 	"github.com/example/payrelay/internal/core/ports"
 )
+
+//go:embed swagger/*
+var swaggerFiles embed.FS
 
 type Server struct {
 	service *application.Service
@@ -28,6 +33,11 @@ func NewServer(service *application.Service, logger *slog.Logger) http.Handler {
 	return s.withLogging(s.mux)
 }
 func (s *Server) routes() {
+	swaggerFS, err := fs.Sub(swaggerFiles, "swagger")
+	if err != nil {
+		panic(fmt.Sprintf("load embedded API documentation: %v", err))
+	}
+	s.mux.Handle("GET /docs/", http.StripPrefix("/docs/", http.FileServerFS(swaggerFS)))
 	s.mux.HandleFunc("GET /healthz", s.health)
 	s.mux.HandleFunc("POST /v1/endpoints", s.createEndpoint)
 	s.mux.HandleFunc("GET /v1/endpoints", s.listEndpoints)
