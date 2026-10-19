@@ -33,10 +33,10 @@ func (s *Store) Close() error { return s.db.Close() }
 func (s *Store) migrate(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS endpoints (
- id TEXT PRIMARY KEY, url TEXT NOT NULL, secret TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL
+ id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'legacy', url TEXT NOT NULL, secret TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS events (
- id TEXT PRIMARY KEY, type TEXT NOT NULL, merchant_reference TEXT NOT NULL, amount_cents INTEGER NOT NULL,
+ id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'legacy', type TEXT NOT NULL, merchant_reference TEXT NOT NULL, amount_cents INTEGER NOT NULL,
  currency TEXT NOT NULL, status TEXT NOT NULL, idempotency_key TEXT UNIQUE, request_fingerprint TEXT, occurred_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS deliveries (
@@ -51,15 +51,50 @@ CREATE TABLE IF NOT EXISTS delivery_attempts (
 CREATE INDEX IF NOT EXISTS deliveries_due_idx ON deliveries(status, next_attempt_at);
 CREATE INDEX IF NOT EXISTS attempts_delivery_idx ON delivery_attempts(delivery_id, number);
 `)
+	if err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(ctx, s.db, "endpoints", "tenant_id", "TEXT NOT NULL DEFAULT 'legacy'"); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(ctx, s.db, "events", "tenant_id", "TEXT NOT NULL DEFAULT 'legacy'"); err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS endpoints_tenant_active_idx ON endpoints(tenant_id, active); CREATE INDEX IF NOT EXISTS events_tenant_idx ON events(tenant_id);`)
+	return err
+}
+
+func addColumnIfMissing(ctx context.Context, db *sql.DB, table, column, definition string) error {
+	rows, err := db.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, primaryKey int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, "ALTER TABLE "+table+" ADD COLUMN "+column+" "+definition)
 	return err
 }
 
 func (s *Store) CreateEndpoint(ctx context.Context, endpoint domain.Endpoint) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO endpoints(id,url,secret,active,created_at) VALUES(?,?,?,?,?)`, endpoint.ID, endpoint.URL, endpoint.Secret, boolInt(endpoint.Active), endpoint.CreatedAt.Unix())
+	_, err := s.db.ExecContext(ctx, `INSERT INTO endpoints(id,tenant_id,url,secret,active,created_at) VALUES(?,?,?,?,?,?)`, endpoint.ID, endpoint.TenantID, endpoint.URL, endpoint.Secret, boolInt(endpoint.Active), endpoint.CreatedAt.Unix())
 	return err
 }
-func (s *Store) ListActiveEndpoints(ctx context.Context) ([]domain.Endpoint, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,url,secret,active,created_at FROM endpoints WHERE active=1 ORDER BY created_at`)
+func (s *Store) ListActiveEndpoints(ctx context.Context, tenantID string) ([]domain.Endpoint, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT tenant_id,id,url,secret,active,created_at FROM endpoints WHERE tenant_id=? AND active=1 ORDER BY created_at`, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +104,7 @@ func (s *Store) ListActiveEndpoints(ctx context.Context) ([]domain.Endpoint, err
 		var e domain.Endpoint
 		var created int64
 		var active int
-		if err := rows.Scan(&e.ID, &e.URL, &e.Secret, &active, &created); err != nil {
+		if err := rows.Scan(&e.TenantID, &e.ID, &e.URL, &e.Secret, &active, &created); err != nil {
 			return nil, err
 		}
 		e.Active = active == 1
@@ -78,11 +113,11 @@ func (s *Store) ListActiveEndpoints(ctx context.Context) ([]domain.Endpoint, err
 	}
 	return endpoints, rows.Err()
 }
-func (s *Store) GetEndpoint(ctx context.Context, id string) (domain.Endpoint, error) {
+func (s *Store) GetEndpoint(ctx context.Context, tenantID, id string) (domain.Endpoint, error) {
 	var e domain.Endpoint
 	var created int64
 	var active int
-	err := s.db.QueryRowContext(ctx, `SELECT id,url,secret,active,created_at FROM endpoints WHERE id=?`, id).Scan(&e.ID, &e.URL, &e.Secret, &active, &created)
+	err := s.db.QueryRowContext(ctx, `SELECT tenant_id,id,url,secret,active,created_at FROM endpoints WHERE tenant_id=? AND id=?`, tenantID, id).Scan(&e.TenantID, &e.ID, &e.URL, &e.Secret, &active, &created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return e, ports.ErrNotFound
 	}
@@ -102,7 +137,7 @@ func (s *Store) CreateEvent(ctx context.Context, event domain.PaymentEvent, fing
 	defer tx.Rollback()
 	if event.IdempotencyKey != "" {
 		var id, existingFingerprint string
-		err = tx.QueryRowContext(ctx, `SELECT id,request_fingerprint FROM events WHERE idempotency_key=?`, event.IdempotencyKey).Scan(&id, &existingFingerprint)
+		err = tx.QueryRowContext(ctx, `SELECT id,request_fingerprint FROM events WHERE tenant_id=? AND idempotency_key=?`, event.TenantID, event.IdempotencyKey).Scan(&id, &existingFingerprint)
 		if err == nil {
 			if existingFingerprint != fingerprint {
 				return domain.PaymentEvent{}, false, ports.ErrIdempotencyConflict
@@ -114,7 +149,7 @@ func (s *Store) CreateEvent(ctx context.Context, event domain.PaymentEvent, fing
 			return domain.PaymentEvent{}, false, err
 		}
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO events(id,type,merchant_reference,amount_cents,currency,status,idempotency_key,request_fingerprint,occurred_at) VALUES(?,?,?,?,?,?,?,?,?)`, event.ID, event.Type, event.MerchantRef, event.AmountCents, event.Currency, event.Status, nullString(event.IdempotencyKey), fingerprint, event.OccurredAt.Unix())
+	_, err = tx.ExecContext(ctx, `INSERT INTO events(id,tenant_id,type,merchant_reference,amount_cents,currency,status,idempotency_key,request_fingerprint,occurred_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, event.ID, event.TenantID, event.Type, event.MerchantRef, event.AmountCents, event.Currency, event.Status, nullString(event.IdempotencyKey), fingerprint, event.OccurredAt.Unix())
 	if err != nil {
 		return domain.PaymentEvent{}, false, err
 	}
@@ -135,17 +170,22 @@ func getEvent(ctx context.Context, q interface {
 }, id string) (domain.PaymentEvent, error) {
 	var e domain.PaymentEvent
 	var occurred int64
-	err := q.QueryRowContext(ctx, `SELECT id,type,merchant_reference,amount_cents,currency,status,occurred_at FROM events WHERE id=?`, id).Scan(&e.ID, &e.Type, &e.MerchantRef, &e.AmountCents, &e.Currency, &e.Status, &occurred)
+	err := q.QueryRowContext(ctx, `SELECT tenant_id,id,type,merchant_reference,amount_cents,currency,status,occurred_at FROM events WHERE id=?`, id).Scan(&e.TenantID, &e.ID, &e.Type, &e.MerchantRef, &e.AmountCents, &e.Currency, &e.Status, &occurred)
 	if err != nil {
 		return e, err
 	}
 	e.OccurredAt = time.Unix(occurred, 0).UTC()
 	return e, nil
 }
-func (s *Store) GetEvent(ctx context.Context, id string) (domain.PaymentEvent, error) {
-	e, err := getEvent(ctx, s.db, id)
+func (s *Store) GetEvent(ctx context.Context, tenantID, id string) (domain.PaymentEvent, error) {
+	var e domain.PaymentEvent
+	var occurred int64
+	err := s.db.QueryRowContext(ctx, `SELECT tenant_id,id,type,merchant_reference,amount_cents,currency,status,occurred_at FROM events WHERE tenant_id=? AND id=?`, tenantID, id).Scan(&e.TenantID, &e.ID, &e.Type, &e.MerchantRef, &e.AmountCents, &e.Currency, &e.Status, &occurred)
 	if errors.Is(err, sql.ErrNoRows) {
 		return e, ports.ErrNotFound
+	}
+	if err == nil {
+		e.OccurredAt = time.Unix(occurred, 0).UTC()
 	}
 	return e, err
 }
@@ -189,7 +229,7 @@ func loadDispatch(ctx context.Context, q interface {
 	var active int
 	var e domain.Endpoint
 	var event domain.PaymentEvent
-	err := q.QueryRowContext(ctx, `SELECT d.id,d.event_id,d.endpoint_id,d.status,d.attempt_count,d.next_attempt_at,d.last_error,d.created_at,d.updated_at,e.id,e.url,e.secret,e.active,e.created_at,v.id,v.type,v.merchant_reference,v.amount_cents,v.currency,v.status,v.occurred_at FROM deliveries d JOIN endpoints e ON e.id=d.endpoint_id JOIN events v ON v.id=d.event_id WHERE d.id=?`, id).Scan(&d.ID, &d.EventID, &d.EndpointID, &d.Status, &d.AttemptCount, &next, &d.LastError, &created, &updated, &e.ID, &e.URL, &e.Secret, &active, &endpointCreated, &event.ID, &event.Type, &event.MerchantRef, &event.AmountCents, &event.Currency, &event.Status, &occurred)
+	err := q.QueryRowContext(ctx, `SELECT d.id,d.event_id,d.endpoint_id,d.status,d.attempt_count,d.next_attempt_at,d.last_error,d.created_at,d.updated_at,e.tenant_id,e.id,e.url,e.secret,e.active,e.created_at,v.tenant_id,v.id,v.type,v.merchant_reference,v.amount_cents,v.currency,v.status,v.occurred_at FROM deliveries d JOIN endpoints e ON e.id=d.endpoint_id JOIN events v ON v.id=d.event_id WHERE d.id=?`, id).Scan(&d.ID, &d.EventID, &d.EndpointID, &d.Status, &d.AttemptCount, &next, &d.LastError, &created, &updated, &e.TenantID, &e.ID, &e.URL, &e.Secret, &active, &endpointCreated, &event.TenantID, &event.ID, &event.Type, &event.MerchantRef, &event.AmountCents, &event.Currency, &event.Status, &occurred)
 	if err != nil {
 		return d, e, event, err
 	}
@@ -237,8 +277,8 @@ func (s *Store) RecordAttempt(ctx context.Context, deliveryID string, statusCode
 	}
 	return tx.Commit()
 }
-func (s *Store) ListDeliveries(ctx context.Context, eventID string) ([]domain.Delivery, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,event_id,endpoint_id,status,attempt_count,next_attempt_at,last_error,created_at,updated_at FROM deliveries WHERE event_id=? ORDER BY created_at`, eventID)
+func (s *Store) ListDeliveries(ctx context.Context, tenantID, eventID string) ([]domain.Delivery, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT d.id,d.event_id,d.endpoint_id,d.status,d.attempt_count,d.next_attempt_at,d.last_error,d.created_at,d.updated_at FROM deliveries d JOIN events e ON e.id=d.event_id WHERE e.tenant_id=? AND d.event_id=? ORDER BY d.created_at`, tenantID, eventID)
 	if err != nil {
 		return nil, err
 	}
@@ -257,8 +297,8 @@ func (s *Store) ListDeliveries(ctx context.Context, eventID string) ([]domain.De
 	}
 	return all, rows.Err()
 }
-func (s *Store) ListAttempts(ctx context.Context, deliveryID string) ([]domain.DeliveryAttempt, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,delivery_id,number,status_code,error,duration_ms,created_at FROM delivery_attempts WHERE delivery_id=? ORDER BY number`, deliveryID)
+func (s *Store) ListAttempts(ctx context.Context, tenantID, deliveryID string) ([]domain.DeliveryAttempt, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT a.id,a.delivery_id,a.number,a.status_code,a.error,a.duration_ms,a.created_at FROM delivery_attempts a JOIN deliveries d ON d.id=a.delivery_id JOIN events e ON e.id=d.event_id WHERE e.tenant_id=? AND a.delivery_id=? ORDER BY a.number`, tenantID, deliveryID)
 	if err != nil {
 		return nil, err
 	}
@@ -275,8 +315,8 @@ func (s *Store) ListAttempts(ctx context.Context, deliveryID string) ([]domain.D
 	}
 	return all, rows.Err()
 }
-func (s *Store) ReplayFailed(ctx context.Context, deliveryID string) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE deliveries SET status='pending',attempt_count=0,next_attempt_at=?,last_error='',updated_at=? WHERE id=? AND status='failed'`, time.Now().UTC().Unix(), time.Now().UTC().Unix(), deliveryID)
+func (s *Store) ReplayFailed(ctx context.Context, tenantID, deliveryID string) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE deliveries SET status='pending',attempt_count=0,next_attempt_at=?,last_error='',updated_at=? WHERE id=? AND status='failed' AND event_id IN (SELECT id FROM events WHERE tenant_id=?)`, time.Now().UTC().Unix(), time.Now().UTC().Unix(), deliveryID, tenantID)
 	if err != nil {
 		return err
 	}

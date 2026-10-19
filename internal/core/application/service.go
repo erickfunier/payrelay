@@ -23,24 +23,28 @@ func NewService(repository ports.Repository, sender ports.WebhookSender, maxAtte
 	return &Service{repository: repository, sender: sender, maxAttempts: maxAttempts}
 }
 
-func (s *Service) CreateEndpoint(ctx context.Context, rawURL string) (domain.Endpoint, error) {
+func (s *Service) CreateEndpoint(ctx context.Context, tenantID, rawURL string) (domain.Endpoint, error) {
 	secret, err := newSecret()
 	if err != nil {
 		return domain.Endpoint{}, err
 	}
-	endpoint := domain.Endpoint{ID: domain.NewID("we"), URL: rawURL, Secret: secret, Active: true, CreatedAt: time.Now().UTC()}
+	endpoint := domain.Endpoint{TenantID: tenantID, ID: domain.NewID("we"), URL: rawURL, Secret: secret, Active: true, CreatedAt: time.Now().UTC()}
 	if err := s.repository.CreateEndpoint(ctx, endpoint); err != nil {
 		return domain.Endpoint{}, err
 	}
 	return endpoint, nil
 }
 
-func (s *Service) ListActiveEndpoints(ctx context.Context) ([]domain.Endpoint, error) {
-	return s.repository.ListActiveEndpoints(ctx)
+func (s *Service) ListActiveEndpoints(ctx context.Context, tenantID string) ([]domain.Endpoint, error) {
+	return s.repository.ListActiveEndpoints(ctx, tenantID)
 }
 
-func (s *Service) CreateEvent(ctx context.Context, event domain.PaymentEvent) (domain.PaymentEvent, bool, error) {
-	endpoints, err := s.repository.ListActiveEndpoints(ctx)
+func (s *Service) CreateEvent(ctx context.Context, tenantID string, event domain.PaymentEvent) (domain.PaymentEvent, bool, error) {
+	event.TenantID = tenantID
+	if event.IdempotencyKey != "" {
+		event.IdempotencyKey = tenantID + ":" + event.IdempotencyKey
+	}
+	endpoints, err := s.repository.ListActiveEndpoints(ctx, tenantID)
 	if err != nil {
 		return domain.PaymentEvent{}, false, err
 	}
@@ -48,20 +52,20 @@ func (s *Service) CreateEvent(ctx context.Context, event domain.PaymentEvent) (d
 	return s.repository.CreateEvent(ctx, event, fingerprint, endpoints)
 }
 
-func (s *Service) GetEvent(ctx context.Context, id string) (domain.PaymentEvent, error) {
-	return s.repository.GetEvent(ctx, id)
+func (s *Service) GetEvent(ctx context.Context, tenantID, id string) (domain.PaymentEvent, error) {
+	return s.repository.GetEvent(ctx, tenantID, id)
 }
 
-func (s *Service) ListDeliveries(ctx context.Context, eventID string) ([]domain.Delivery, error) {
-	return s.repository.ListDeliveries(ctx, eventID)
+func (s *Service) ListDeliveries(ctx context.Context, tenantID, eventID string) ([]domain.Delivery, error) {
+	return s.repository.ListDeliveries(ctx, tenantID, eventID)
 }
 
-func (s *Service) ListAttempts(ctx context.Context, deliveryID string) ([]domain.DeliveryAttempt, error) {
-	return s.repository.ListAttempts(ctx, deliveryID)
+func (s *Service) ListAttempts(ctx context.Context, tenantID, deliveryID string) ([]domain.DeliveryAttempt, error) {
+	return s.repository.ListAttempts(ctx, tenantID, deliveryID)
 }
 
-func (s *Service) ReplayFailed(ctx context.Context, deliveryID string) error {
-	return s.repository.ReplayFailed(ctx, deliveryID)
+func (s *Service) ReplayFailed(ctx context.Context, tenantID, deliveryID string) error {
+	return s.repository.ReplayFailed(ctx, tenantID, deliveryID)
 }
 
 // DispatchOne claims one due delivery and records a durable outcome. Delivery

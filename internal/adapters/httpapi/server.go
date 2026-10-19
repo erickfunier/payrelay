@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -24,11 +25,12 @@ var swaggerFiles embed.FS
 type Server struct {
 	service *application.Service
 	logger  *slog.Logger
+	auth    TenantAuthenticator
 	mux     *http.ServeMux
 }
 
-func NewServer(service *application.Service, logger *slog.Logger) http.Handler {
-	s := &Server{service: service, logger: logger, mux: http.NewServeMux()}
+func NewServer(service *application.Service, logger *slog.Logger, auth TenantAuthenticator) http.Handler {
+	s := &Server{service: service, logger: logger, auth: auth, mux: http.NewServeMux()}
 	s.routes()
 	return s.withLogging(s.mux)
 }
@@ -40,13 +42,32 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /docs/openapi.yaml", s.openAPI)
 	s.mux.Handle("GET /docs/", http.StripPrefix("/docs/", http.FileServerFS(swaggerFS)))
 	s.mux.HandleFunc("GET /healthz", s.health)
-	s.mux.HandleFunc("POST /v1/endpoints", s.createEndpoint)
-	s.mux.HandleFunc("GET /v1/endpoints", s.listEndpoints)
-	s.mux.HandleFunc("POST /v1/events", s.createEvent)
-	s.mux.HandleFunc("GET /v1/events/{eventID}", s.getEvent)
-	s.mux.HandleFunc("GET /v1/events/{eventID}/deliveries", s.listDeliveries)
-	s.mux.HandleFunc("GET /v1/deliveries/{deliveryID}/attempts", s.listAttempts)
-	s.mux.HandleFunc("POST /v1/deliveries/{deliveryID}/replay", s.replay)
+	s.handleAuthenticated("POST /v1/endpoints", s.createEndpoint)
+	s.handleAuthenticated("GET /v1/endpoints", s.listEndpoints)
+	s.handleAuthenticated("POST /v1/events", s.createEvent)
+	s.handleAuthenticated("GET /v1/events/{eventID}", s.getEvent)
+	s.handleAuthenticated("GET /v1/events/{eventID}/deliveries", s.listDeliveries)
+	s.handleAuthenticated("GET /v1/deliveries/{deliveryID}/attempts", s.listAttempts)
+	s.handleAuthenticated("POST /v1/deliveries/{deliveryID}/replay", s.replay)
+}
+
+type tenantContextKey struct{}
+
+func (s *Server) handleAuthenticated(pattern string, next http.HandlerFunc) {
+	s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+		tenantID, authenticated := s.auth.Authenticate(r.Header.Get("Authorization"))
+		if !authenticated {
+			w.Header().Set("WWW-Authenticate", "Bearer")
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
+			return
+		}
+		next(w, r.WithContext(context.WithValue(r.Context(), tenantContextKey{}, tenantID)))
+	})
+}
+
+func tenantID(ctx context.Context) string {
+	value, _ := ctx.Value(tenantContextKey{}).(string)
+	return value
 }
 
 func (s *Server) openAPI(w http.ResponseWriter, _ *http.Request) {
@@ -78,7 +99,7 @@ func (s *Server) createEndpoint(w http.ResponseWriter, r *http.Request) {
 		bad(w, errors.New("url must be an absolute http(s) URL"))
 		return
 	}
-	endpoint, err := s.service.CreateEndpoint(r.Context(), input.URL)
+	endpoint, err := s.service.CreateEndpoint(r.Context(), tenantID(r.Context()), input.URL)
 	if err != nil {
 		internal(w, err)
 		return
@@ -86,7 +107,7 @@ func (s *Server) createEndpoint(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, endpoint)
 }
 func (s *Server) listEndpoints(w http.ResponseWriter, r *http.Request) {
-	endpoints, err := s.service.ListActiveEndpoints(r.Context())
+	endpoints, err := s.service.ListActiveEndpoints(r.Context(), tenantID(r.Context()))
 	if err != nil {
 		internal(w, err)
 		return
@@ -125,7 +146,7 @@ func (s *Server) createEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	idempotency := r.Header.Get("Idempotency-Key")
 	event := domain.PaymentEvent{ID: domain.NewID("evt"), Type: input.Type, MerchantRef: input.MerchantReference, AmountCents: input.AmountCents, Currency: input.Currency, Status: input.Status, OccurredAt: time.Now().UTC(), IdempotencyKey: idempotency}
-	saved, replayed, err := s.service.CreateEvent(r.Context(), event)
+	saved, replayed, err := s.service.CreateEvent(r.Context(), tenantID(r.Context()), event)
 	if errors.Is(err, ports.ErrIdempotencyConflict) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
@@ -141,7 +162,7 @@ func (s *Server) createEvent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, status, map[string]any{"event": saved, "idempotent_replay": replayed})
 }
 func (s *Server) getEvent(w http.ResponseWriter, r *http.Request) {
-	event, err := s.service.GetEvent(r.Context(), r.PathValue("eventID"))
+	event, err := s.service.GetEvent(r.Context(), tenantID(r.Context()), r.PathValue("eventID"))
 	if errors.Is(err, ports.ErrNotFound) {
 		notFound(w)
 		return
@@ -154,11 +175,11 @@ func (s *Server) getEvent(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) listDeliveries(w http.ResponseWriter, r *http.Request) {
 	eventID := r.PathValue("eventID")
-	if _, err := s.service.GetEvent(r.Context(), eventID); errors.Is(err, ports.ErrNotFound) {
+	if _, err := s.service.GetEvent(r.Context(), tenantID(r.Context()), eventID); errors.Is(err, ports.ErrNotFound) {
 		notFound(w)
 		return
 	}
-	deliveries, err := s.service.ListDeliveries(r.Context(), eventID)
+	deliveries, err := s.service.ListDeliveries(r.Context(), tenantID(r.Context()), eventID)
 	if err != nil {
 		internal(w, err)
 		return
@@ -166,7 +187,7 @@ func (s *Server) listDeliveries(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"data": deliveries})
 }
 func (s *Server) listAttempts(w http.ResponseWriter, r *http.Request) {
-	attempts, err := s.service.ListAttempts(r.Context(), r.PathValue("deliveryID"))
+	attempts, err := s.service.ListAttempts(r.Context(), tenantID(r.Context()), r.PathValue("deliveryID"))
 	if err != nil {
 		internal(w, err)
 		return
@@ -174,7 +195,7 @@ func (s *Server) listAttempts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"data": attempts})
 }
 func (s *Server) replay(w http.ResponseWriter, r *http.Request) {
-	err := s.service.ReplayFailed(r.Context(), r.PathValue("deliveryID"))
+	err := s.service.ReplayFailed(r.Context(), tenantID(r.Context()), r.PathValue("deliveryID"))
 	if errors.Is(err, ports.ErrNotFound) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "delivery was not found or is not failed"})
 		return

@@ -6,10 +6,13 @@ info:
 servers:
   - url: /
     description: The server hosting this Swagger UI instance
+security:
+  - bearerAuth: []
 paths:
   /healthz:
     get:
       summary: Health check
+      security: []
       responses:
         '200':
           description: Server is ready
@@ -113,6 +116,12 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API key
+      description: Set this to one configured PayRelay API key. It resolves the tenant boundary for every management request.
   parameters:
     IdempotencyKey:
       name: Idempotency-Key

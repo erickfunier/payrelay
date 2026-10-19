@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"testing"
@@ -12,6 +13,7 @@ import (
 )
 
 func TestStore_GivenRepeatedIdempotencyKey_WhenCreatingEvent_ThenReturnsOriginalOrConflict(t *testing.T) {
+	const tenantID = "merchant_alpha"
 	repo, err := Open(filepath.Join(t.TempDir(), "payrelay.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -19,7 +21,7 @@ func TestStore_GivenRepeatedIdempotencyKey_WhenCreatingEvent_ThenReturnsOriginal
 	defer repo.Close()
 
 	ctx := context.Background()
-	first := domain.PaymentEvent{ID: "evt_first", Type: "payment.succeeded", MerchantRef: "order_1", AmountCents: 2500, Currency: "USD", Status: "succeeded", OccurredAt: time.Now(), IdempotencyKey: "request_1"}
+	first := domain.PaymentEvent{TenantID: tenantID, ID: "evt_first", Type: "payment.succeeded", MerchantRef: "order_1", AmountCents: 2500, Currency: "USD", Status: "succeeded", OccurredAt: time.Now(), IdempotencyKey: "merchant_alpha:request_1"}
 	saved, replay, err := repo.CreateEvent(ctx, first, "fingerprint_1", nil)
 	if err != nil || replay || saved.ID != first.ID {
 		t.Fatalf("first request: saved=%#v replay=%v err=%v", saved, replay, err)
@@ -39,6 +41,7 @@ func TestStore_GivenRepeatedIdempotencyKey_WhenCreatingEvent_ThenReturnsOriginal
 }
 
 func TestStore_GivenDeliveryLifecycle_WhenAttemptsAreRecorded_ThenPersistsHistoryAndReplay(t *testing.T) {
+	const tenantID = "merchant_alpha"
 	repo, err := Open(filepath.Join(t.TempDir(), "payrelay.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -46,37 +49,37 @@ func TestStore_GivenDeliveryLifecycle_WhenAttemptsAreRecorded_ThenPersistsHistor
 	defer repo.Close()
 	ctx := context.Background()
 	now := time.Now().UTC()
-	endpoint := domain.Endpoint{ID: "we_lifecycle", URL: "https://example.test/webhooks", Secret: "whsec_lifecycle", Active: true, CreatedAt: now}
+	endpoint := domain.Endpoint{TenantID: tenantID, ID: "we_lifecycle", URL: "https://example.test/webhooks", Secret: "whsec_lifecycle", Active: true, CreatedAt: now}
 	if err := repo.CreateEndpoint(ctx, endpoint); err != nil {
 		t.Fatal(err)
 	}
-	endpoints, err := repo.ListActiveEndpoints(ctx)
+	endpoints, err := repo.ListActiveEndpoints(ctx, tenantID)
 	if err != nil || len(endpoints) != 1 || endpoints[0].Secret != endpoint.Secret {
 		t.Fatalf("active endpoints: %#v (%v)", endpoints, err)
 	}
-	gotEndpoint, err := repo.GetEndpoint(ctx, endpoint.ID)
+	gotEndpoint, err := repo.GetEndpoint(ctx, tenantID, endpoint.ID)
 	if err != nil || gotEndpoint.URL != endpoint.URL {
 		t.Fatalf("get endpoint: %#v (%v)", gotEndpoint, err)
 	}
-	if _, err := repo.GetEndpoint(ctx, "we_missing"); !errors.Is(err, ports.ErrNotFound) {
+	if _, err := repo.GetEndpoint(ctx, tenantID, "we_missing"); !errors.Is(err, ports.ErrNotFound) {
 		t.Fatalf("missing endpoint error = %v", err)
 	}
 
-	event := domain.PaymentEvent{ID: "evt_lifecycle", Type: "payment.succeeded", MerchantRef: "order_lifecycle", AmountCents: 700, Currency: "USD", Status: "succeeded", OccurredAt: now}
+	event := domain.PaymentEvent{TenantID: tenantID, ID: "evt_lifecycle", Type: "payment.succeeded", MerchantRef: "order_lifecycle", AmountCents: 700, Currency: "USD", Status: "succeeded", OccurredAt: now}
 	if _, replay, err := repo.CreateEvent(ctx, event, "lifecycle", endpoints); err != nil || replay {
 		t.Fatalf("create event: replay=%v err=%v", replay, err)
 	}
-	gotEvent, err := repo.GetEvent(ctx, event.ID)
+	gotEvent, err := repo.GetEvent(ctx, tenantID, event.ID)
 	if err != nil || gotEvent.MerchantRef != event.MerchantRef {
 		t.Fatalf("get event: %#v (%v)", gotEvent, err)
 	}
-	if _, err := repo.GetEvent(ctx, "evt_missing"); !errors.Is(err, ports.ErrNotFound) {
+	if _, err := repo.GetEvent(ctx, tenantID, "evt_missing"); !errors.Is(err, ports.ErrNotFound) {
 		t.Fatalf("missing event error = %v", err)
 	}
 	if err := repo.RecordAttempt(ctx, "dlv_missing", 500, "missing", time.Millisecond, nil); !errors.Is(err, ports.ErrNotFound) {
 		t.Fatalf("missing delivery attempt error = %v", err)
 	}
-	if attempts, err := repo.ListAttempts(ctx, "dlv_missing"); err != nil || len(attempts) != 0 {
+	if attempts, err := repo.ListAttempts(ctx, tenantID, "dlv_missing"); err != nil || len(attempts) != 0 {
 		t.Fatalf("missing delivery attempts: %#v (%v)", attempts, err)
 	}
 
@@ -98,16 +101,16 @@ func TestStore_GivenDeliveryLifecycle_WhenAttemptsAreRecorded_ThenPersistsHistor
 	if err := repo.RecordAttempt(ctx, delivery.ID, 204, "", 5*time.Millisecond, nil); err != nil {
 		t.Fatal(err)
 	}
-	deliveries, err := repo.ListDeliveries(ctx, event.ID)
+	deliveries, err := repo.ListDeliveries(ctx, tenantID, event.ID)
 	if err != nil || len(deliveries) != 1 || deliveries[0].Status != "succeeded" || deliveries[0].AttemptCount != 2 {
 		t.Fatalf("deliveries: %#v (%v)", deliveries, err)
 	}
-	attempts, err := repo.ListAttempts(ctx, delivery.ID)
+	attempts, err := repo.ListAttempts(ctx, tenantID, delivery.ID)
 	if err != nil || len(attempts) != 2 || attempts[0].StatusCode != 503 || attempts[1].StatusCode != 204 {
 		t.Fatalf("attempts: %#v (%v)", attempts, err)
 	}
 
-	failed := domain.PaymentEvent{ID: "evt_failed", Type: "payment.failed", MerchantRef: "order_failed", AmountCents: 100, Currency: "USD", Status: "failed", OccurredAt: now}
+	failed := domain.PaymentEvent{TenantID: tenantID, ID: "evt_failed", Type: "payment.failed", MerchantRef: "order_failed", AmountCents: 100, Currency: "USD", Status: "failed", OccurredAt: now}
 	if _, _, err := repo.CreateEvent(ctx, failed, "failed", endpoints); err != nil {
 		t.Fatal(err)
 	}
@@ -118,10 +121,10 @@ func TestStore_GivenDeliveryLifecycle_WhenAttemptsAreRecorded_ThenPersistsHistor
 	if err := repo.RecordAttempt(ctx, failedDelivery.ID, 500, "receiver returned HTTP 500", time.Millisecond, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.ReplayFailed(ctx, failedDelivery.ID); err != nil {
+	if err := repo.ReplayFailed(ctx, tenantID, failedDelivery.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.ReplayFailed(ctx, "dlv_missing"); !errors.Is(err, ports.ErrNotFound) {
+	if err := repo.ReplayFailed(ctx, tenantID, "dlv_missing"); !errors.Is(err, ports.ErrNotFound) {
 		t.Fatalf("missing replay error = %v", err)
 	}
 }
@@ -132,5 +135,30 @@ func TestStore_GivenHelperInputs_WhenNormalized_ThenReturnsExpectedValues(t *tes
 	}
 	if nullString("") != nil || nullString("value") != "value" {
 		t.Fatal("null string conversion is incorrect")
+	}
+}
+
+func TestStore_GivenPhaseOneDatabase_WhenOpened_ThenMigratesRecordsToLegacyTenant(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "phase-one.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = legacy.Exec(`CREATE TABLE endpoints (id TEXT PRIMARY KEY, url TEXT NOT NULL, secret TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL); INSERT INTO endpoints(id,url,secret,active,created_at) VALUES ('we_legacy','https://legacy.example.test','whsec_legacy',1,0);`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	repo, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	endpoints, err := repo.ListActiveEndpoints(context.Background(), "legacy")
+	if err != nil || len(endpoints) != 1 || endpoints[0].ID != "we_legacy" || endpoints[0].TenantID != "legacy" {
+		t.Fatalf("migrated endpoints = %#v, err = %v", endpoints, err)
 	}
 }

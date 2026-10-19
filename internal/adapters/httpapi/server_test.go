@@ -145,6 +145,71 @@ func TestAPI_GivenHealthCheck_WhenRequested_ThenReturnsOK(t *testing.T) {
 	}
 }
 
+func TestAPI_GivenMissingOrInvalidCredentials_WhenManagingResources_ThenRejectsRequest(t *testing.T) {
+	handler, _ := testServer(t)
+
+	tests := []struct {
+		name          string
+		path          string
+		authorization string
+		want          int
+	}{
+		{name: "Given no Bearer token When listing endpoints Then it returns unauthorized", path: "/v1/endpoints", want: http.StatusUnauthorized},
+		{name: "Given invalid Bearer token When listing endpoints Then it returns unauthorized", path: "/v1/endpoints", authorization: "Bearer prk_invalid_key_value_which_is_long_enough", want: http.StatusUnauthorized},
+		{name: "Given no credential When requesting health Then it remains public", path: "/healthz", want: http.StatusOK},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			if tt.authorization != "" {
+				req.Header.Set("Authorization", tt.authorization)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, req)
+			if response.Code != tt.want {
+				t.Fatalf("status = %d, want %d: %s", response.Code, tt.want, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestAPI_GivenTwoTenants_WhenResourcesAreRequestedAcrossBoundary_ThenTheyAreHidden(t *testing.T) {
+	handler, _ := testServer(t)
+	created := requestAs(t, handler, "prk_alpha_0123456789abcdef0123456789", http.MethodPost, "/v1/endpoints", `{"url":"https://alpha.example.test/webhooks"}`, nil)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create endpoint: %d %s", created.Code, created.Body.String())
+	}
+	var endpoint domain.Endpoint
+	decodeJSON(t, created.Body.Bytes(), &endpoint)
+
+	otherList := requestAs(t, handler, "prk_beta_0123456789abcdef01234567890", http.MethodGet, "/v1/endpoints", "", nil)
+	var listed struct {
+		Data []domain.Endpoint `json:"data"`
+	}
+	decodeJSON(t, otherList.Body.Bytes(), &listed)
+	if otherList.Code != http.StatusOK || len(listed.Data) != 0 {
+		t.Fatalf("tenant beta saw tenant alpha endpoints: %d %#v", otherList.Code, listed)
+	}
+
+	payload := `{"type":"payment.succeeded","merchant_reference":"tenant-boundary","amount_cents":100,"currency":"USD","status":"succeeded"}`
+	createdEvent := requestAs(t, handler, "prk_alpha_0123456789abcdef0123456789", http.MethodPost, "/v1/events", payload, map[string]string{"Idempotency-Key": "shared-client-key"})
+	if createdEvent.Code != http.StatusCreated {
+		t.Fatalf("create event: %d %s", createdEvent.Code, createdEvent.Body.String())
+	}
+	var eventResult struct {
+		Event domain.PaymentEvent `json:"event"`
+	}
+	decodeJSON(t, createdEvent.Body.Bytes(), &eventResult)
+	betaEvent := requestAs(t, handler, "prk_beta_0123456789abcdef01234567890", http.MethodPost, "/v1/events", payload, map[string]string{"Idempotency-Key": "shared-client-key"})
+	if betaEvent.Code != http.StatusCreated {
+		t.Fatalf("tenant beta event: %d %s", betaEvent.Code, betaEvent.Body.String())
+	}
+	otherEvent := requestAs(t, handler, "prk_beta_0123456789abcdef01234567890", http.MethodGet, "/v1/events/"+eventResult.Event.ID, "", nil)
+	if otherEvent.Code != http.StatusNotFound {
+		t.Fatalf("tenant beta lookup: %d %s", otherEvent.Code, otherEvent.Body.String())
+	}
+}
+
 func TestAPI_GivenDocumentation_WhenRequested_ThenServesSwaggerUIAndOpenAPIContract(t *testing.T) {
 	handler, _ := testServer(t)
 
@@ -226,18 +291,32 @@ func testServer(t *testing.T) (http.Handler, *application.Service) {
 	t.Cleanup(func() { _ = repo.Close() })
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	service := application.NewService(repo, webhook.NewHTTPSender(http.DefaultClient), 1)
-	return NewServer(service, logger), service
+	authenticator, err := NewAPIKeyAuthenticator("merchant_alpha:prk_alpha_0123456789abcdef0123456789,merchant_beta:prk_beta_0123456789abcdef01234567890")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewServer(service, logger, authenticator), service
 }
 
 func request(t *testing.T, handler http.Handler, method, path, body string, headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, bytes.NewBufferString(body))
+	req.Header.Set("Authorization", "Bearer prk_alpha_0123456789abcdef0123456789")
 	for key, value := range headers {
 		req.Header.Set(key, value)
 	}
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, req)
 	return response
+}
+
+func requestAs(t *testing.T, handler http.Handler, apiKey, method, path, body string, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	requestHeaders := map[string]string{"Authorization": "Bearer " + apiKey}
+	for key, value := range headers {
+		requestHeaders[key] = value
+	}
+	return request(t, handler, method, path, body, requestHeaders)
 }
 
 func decodeJSON(t *testing.T, body []byte, output any) {

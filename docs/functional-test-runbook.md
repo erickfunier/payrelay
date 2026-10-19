@@ -4,16 +4,17 @@ This guide demonstrates the complete mock-only PayRelay flow with real HTTP requ
 
 ## 1. Start PayRelay
 
-In one terminal, start the API. Setting one attempt makes the failed-delivery example deterministic.
+In one terminal, start the API. Setting one attempt makes the failed-delivery example deterministic. Configure a local tenant and API key; all management requests except `/healthz` require it.
 
 ```sh
-PAYRELAY_MAX_ATTEMPTS=1 go run ./cmd/server
+PAYRELAY_MAX_ATTEMPTS=1 PAYRELAY_API_KEYS=merchant_demo:prk_local_demo_key_0123456789 go run ./cmd/server
 ```
 
 On PowerShell:
 
 ```powershell
 $env:PAYRELAY_MAX_ATTEMPTS = "1"
+$env:PAYRELAY_API_KEYS = "merchant_demo:prk_local_demo_key_0123456789"
 go run ./cmd/server
 ```
 
@@ -38,7 +39,9 @@ Set `RECEIVER_URL` to an HTTP request inspector or a small local receiver that r
 
 ```sh
 export RECEIVER_URL="https://your-test-receiver.example/webhooks/payrelay"
+export API_KEY="prk_local_demo_key_0123456789"
 curl -i -X POST http://localhost:8080/v1/endpoints \
+  -H "Authorization: Bearer ${API_KEY}" \
   -H 'Content-Type: application/json' \
   --data "{\"url\":\"${RECEIVER_URL}\"}"
 ```
@@ -63,6 +66,7 @@ The `Idempotency-Key` makes client retries safe. The example contains only ficti
 
 ```sh
 curl -i -X POST http://localhost:8080/v1/events \
+  -H "Authorization: Bearer ${API_KEY}" \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: demo-order-1007' \
   --data '{
@@ -111,7 +115,7 @@ X-PayRelay-Signature: sha256=4d1...
 Use the event ID returned in step 3:
 
 ```sh
-curl -s http://localhost:8080/v1/events/evt_2db.../deliveries
+curl -s -H "Authorization: Bearer ${API_KEY}" http://localhost:8080/v1/events/evt_2db.../deliveries
 ```
 
 Expected result after a `2xx` receiver response:
@@ -130,7 +134,7 @@ Expected result after a `2xx` receiver response:
 Then inspect the immutable attempt record:
 
 ```sh
-curl -s http://localhost:8080/v1/deliveries/dlv_a91.../attempts
+curl -s -H "Authorization: Bearer ${API_KEY}" http://localhost:8080/v1/deliveries/dlv_a91.../attempts
 ```
 
 The result contains an attempt with the receiver's HTTP status code and duration in milliseconds.
@@ -144,7 +148,7 @@ expected = "sha256=" + hex(HMAC-SHA256(secret, timestamp + "." + rawBody))
 accept only if constantTimeEqual(expected, X-PayRelay-Signature)
 ```
 
-`internal/delivery/signature_test.go` provides an executable Go example of both successful verification and tamper rejection.
+`internal/adapters/webhook/signature_test.go` provides an executable Go example of both successful verification and tamper rejection.
 
 ## 6. Demonstrate a failed delivery and replay
 
@@ -161,7 +165,8 @@ Register a second test receiver that deliberately returns `500`, then create ano
 Queue it again after fixing the receiver:
 
 ```sh
-curl -i -X POST http://localhost:8080/v1/deliveries/dlv_failed.../replay
+curl -i -X POST http://localhost:8080/v1/deliveries/dlv_failed.../replay \
+  -H "Authorization: Bearer ${API_KEY}"
 ```
 
 Expected response:
