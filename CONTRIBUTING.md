@@ -53,3 +53,29 @@ Use a squash merge for feature branches so `develop` retains a readable history.
 ## Local conventions
 
 Keep secrets in `.env`, never commit database files or generated credentials, and preserve the mock-only safety guarantees in the README. Add tests for delivery, signing, retry, persistence, and API behavior whenever those areas change.
+
+## Test conventions
+
+Tests describe behavior in the **Given / When / Then** form. Name top-level tests as `Test<Component>_Given<State>_When<Action>_Then<Outcome>` and give subtests lower-case `given_..._when_..._then_...` names. This makes a failing test readable as a requirement without opening its implementation.
+
+Prefer table-driven tests whenever multiple inputs exercise the same behavior. Keep the test case's input, action, and expected result together:
+
+```go
+cases := []struct {
+	name string
+	input string
+	want  int
+}{
+	{name: "given_missing_key_when_creating_event_then_returns_bad_request", input: `{}`, want: http.StatusBadRequest},
+}
+
+for _, tt := range cases {
+	t.Run(tt.name, func(t *testing.T) {
+		// Given: tt.input
+		// When: invoke the handler
+		// Then: compare the response with tt.want
+	})
+}
+```
+
+Use a focused single-scenario test when a lifecycle needs ordered setup, such as creating an event, dispatching it, and verifying its delivery history.

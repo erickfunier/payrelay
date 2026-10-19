@@ -17,3 +17,4 @@
 
 - [ ] The branch targets `develop` (or targets `master` only for a release/hotfix).
 - [ ] Tests and documentation are updated where applicable.
+- [ ] New or updated tests use Given / When / Then names and table-driven cases where inputs share a behavior.

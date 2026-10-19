@@ -21,3 +21,10 @@ jobs:
       - run: go vet ./...
       - run: go test -race ./...
       - run: go build ./cmd/server
+      - name: Enforce internal coverage floor
+        shell: bash
+        run: |
+          go test -coverpkg=./internal/... -coverprofile=coverage.out ./internal/...
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ { print substr($3, 1, length($3)-1) }')
+          echo "Internal statement coverage: ${total}%"
+          awk -v total="$total" 'BEGIN { if (total + 0 < 85) { printf "Coverage %.1f%% is below the required 85%%\n", total; exit 1 } }'

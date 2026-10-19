@@ -71,6 +71,18 @@ make build    # compile the service
 make run      # start locally
 ```
 
+## Quality gates and functional testing
+
+The CI workflow runs unit/integration tests with the race detector and enforces at least **85% statement coverage across `internal/...`**, which contains PayRelay's production domain, API, delivery, and persistence behavior. The `cmd/` package is intentionally excluded from this measurement because it is process wiring; CI still compiles it.
+
+Run the same report locally:
+
+```sh
+make coverage
+```
+
+For a portfolio-ready, end-to-end walkthrough with curl payloads, expected HTTP responses, delivery history, replay behavior, and signature verification, see [the functional test runbook](docs/functional-test-runbook.md).
+
 ## API examples
 
 Register an endpoint (use a request-bin service or a local listener in development):
