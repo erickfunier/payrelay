@@ -1,4 +1,4 @@
-package api
+package httpapi
 
 import (
 	"bytes"
@@ -9,11 +9,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
-	"github.com/example/payrelay/internal/delivery"
-	"github.com/example/payrelay/internal/domain"
-	"github.com/example/payrelay/internal/store"
+	"github.com/example/payrelay/internal/adapters/sqlite"
+	"github.com/example/payrelay/internal/adapters/webhook"
+	"github.com/example/payrelay/internal/core/application"
+	"github.com/example/payrelay/internal/core/domain"
 )
 
 func TestAPI_GivenRegisteredEndpoint_WhenEventIsCreatedAndDispatched_ThenPersistsDeliveryHistory(t *testing.T) {
@@ -143,6 +145,46 @@ func TestAPI_GivenHealthCheck_WhenRequested_ThenReturnsOK(t *testing.T) {
 	}
 }
 
+func TestAPI_GivenDocumentation_WhenRequested_ThenServesSwaggerUIAndOpenAPIContract(t *testing.T) {
+	handler, _ := testServer(t)
+
+	tests := []struct {
+		name        string
+		path        string
+		contentType string
+		contains    string
+	}{
+		{
+			name:        "Given documentation route When Swagger UI is requested Then it returns HTML",
+			path:        "/docs/",
+			contentType: "text/html",
+			contains:    "swagger-ui",
+		},
+		{
+			name:        "Given documentation route When OpenAPI contract is requested Then it returns YAML",
+			path:        "/docs/openapi.yaml",
+			contentType: "application/yaml",
+			contains:    "openapi: 3.0.3",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response := request(t, handler, http.MethodGet, tt.path, "", nil)
+
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d", response.Code, http.StatusOK)
+			}
+			if !strings.Contains(response.Header().Get("Content-Type"), tt.contentType) {
+				t.Fatalf("content type = %q, want it to contain %q", response.Header().Get("Content-Type"), tt.contentType)
+			}
+			if !strings.Contains(response.Body.String(), tt.contains) {
+				t.Fatalf("body = %q, want it to contain %q", response.Body.String(), tt.contains)
+			}
+		})
+	}
+}
+
 func TestAPI_GivenInvalidRequest_WhenHandled_ThenReturnsExpectedClientError(t *testing.T) {
 	handler, _ := testServer(t)
 	cases := []struct {
@@ -175,16 +217,16 @@ func TestAPI_GivenInvalidRequest_WhenHandled_ThenReturnsExpectedClientError(t *t
 	}
 }
 
-func testServer(t *testing.T) (http.Handler, *delivery.Dispatcher) {
+func testServer(t *testing.T) (http.Handler, *application.Service) {
 	t.Helper()
-	repo, err := store.Open(filepath.Join(t.TempDir(), "payrelay.db"))
+	repo, err := sqlite.Open(filepath.Join(t.TempDir(), "payrelay.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = repo.Close() })
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	dispatcher := delivery.NewDispatcher(repo, http.DefaultClient, 1, logger)
-	return NewServer(repo, dispatcher, logger), dispatcher
+	service := application.NewService(repo, webhook.NewHTTPSender(http.DefaultClient), 1)
+	return NewServer(service, logger), service
 }
 
 func request(t *testing.T, handler http.Handler, method, path, body string, headers map[string]string) *httptest.ResponseRecorder {

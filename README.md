@@ -37,14 +37,15 @@ PayRelay is a local/demo platform for synthetic events only.
 ## Architecture
 
 ```text
-REST API → SQLite (events, endpoints, deliveries, attempts)
-                    ↓
-               delivery worker → HMAC-signed HTTP POST → merchant endpoint
-                    ↑                    │
-           retry queue (backoff+jitter)  └─ 2xx succeeds; errors are recorded/retried
+Inbound adapters                 Core                    Outbound adapters
+HTTP API ────────────────→ application service ───→ SQLite repository
+worker scheduler ────────→        │              └──→ HMAC HTTP webhook sender
+                                  domain
 ```
 
-The API writes an event and its initial endpoint delivery jobs in one transaction. A background worker atomically claims due jobs, posts a signed JSON envelope, and persists every outcome. SQLite WAL mode keeps the MVP portable and locally runnable.
+PayRelay uses a ports-and-adapters (hexagonal) design. `internal/core` contains the domain, application use cases, and outbound port interfaces. `internal/adapters` contains the HTTP API, SQLite persistence, webhook transport, and worker scheduler. `cmd/server` is only the composition root that wires those pieces together.
+
+The API writes an event and its initial endpoint delivery jobs in one transaction. A background worker atomically claims due jobs, posts a signed JSON envelope, and persists every outcome. SQLite WAL mode keeps the MVP portable and locally runnable. See [the architecture guide](docs/architecture.md) for dependency rules and testing strategy.
 
 ## Quick start
 
@@ -84,6 +85,12 @@ make coverage
 For a portfolio-ready, end-to-end walkthrough with curl payloads, expected HTTP responses, delivery history, replay behavior, and signature verification, see [the functional test runbook](docs/functional-test-runbook.md).
 
 ## API examples
+
+### Interactive documentation and Postman
+
+After starting the server, open [http://localhost:8080/docs/](http://localhost:8080/docs/) for Swagger UI. It loads the versioned OpenAPI document served by the application and its **Try it out** controls call the local API directly.
+
+Import [`postman/PayRelay.postman_collection.json`](postman/PayRelay.postman_collection.json) into Postman to run the same local workflow with response assertions. The collection starts with the health check and persists created IDs as collection variables for the following requests.
 
 Register an endpoint (use a request-bin service or a local listener in development):
 

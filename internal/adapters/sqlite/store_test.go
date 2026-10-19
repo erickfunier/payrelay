@@ -1,4 +1,4 @@
-package store
+package sqlite
 
 import (
 	"context"
@@ -7,7 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/payrelay/internal/domain"
+	"github.com/example/payrelay/internal/core/domain"
+	"github.com/example/payrelay/internal/core/ports"
 )
 
 func TestStore_GivenRepeatedIdempotencyKey_WhenCreatingEvent_ThenReturnsOriginalOrConflict(t *testing.T) {
@@ -32,7 +33,7 @@ func TestStore_GivenRepeatedIdempotencyKey_WhenCreatingEvent_ThenReturnsOriginal
 	}
 
 	_, _, err = repo.CreateEvent(ctx, second, "different_fingerprint", nil)
-	if !errors.Is(err, ErrIdempotencyConflict) {
+	if !errors.Is(err, ports.ErrIdempotencyConflict) {
 		t.Fatalf("expected idempotency conflict, got %v", err)
 	}
 }
@@ -57,7 +58,7 @@ func TestStore_GivenDeliveryLifecycle_WhenAttemptsAreRecorded_ThenPersistsHistor
 	if err != nil || gotEndpoint.URL != endpoint.URL {
 		t.Fatalf("get endpoint: %#v (%v)", gotEndpoint, err)
 	}
-	if _, err := repo.GetEndpoint(ctx, "we_missing"); !errors.Is(err, ErrNotFound) {
+	if _, err := repo.GetEndpoint(ctx, "we_missing"); !errors.Is(err, ports.ErrNotFound) {
 		t.Fatalf("missing endpoint error = %v", err)
 	}
 
@@ -69,10 +70,10 @@ func TestStore_GivenDeliveryLifecycle_WhenAttemptsAreRecorded_ThenPersistsHistor
 	if err != nil || gotEvent.MerchantRef != event.MerchantRef {
 		t.Fatalf("get event: %#v (%v)", gotEvent, err)
 	}
-	if _, err := repo.GetEvent(ctx, "evt_missing"); !errors.Is(err, ErrNotFound) {
+	if _, err := repo.GetEvent(ctx, "evt_missing"); !errors.Is(err, ports.ErrNotFound) {
 		t.Fatalf("missing event error = %v", err)
 	}
-	if err := repo.RecordAttempt(ctx, "dlv_missing", 500, "missing", time.Millisecond, nil); !errors.Is(err, ErrNotFound) {
+	if err := repo.RecordAttempt(ctx, "dlv_missing", 500, "missing", time.Millisecond, nil); !errors.Is(err, ports.ErrNotFound) {
 		t.Fatalf("missing delivery attempt error = %v", err)
 	}
 	if attempts, err := repo.ListAttempts(ctx, "dlv_missing"); err != nil || len(attempts) != 0 {
@@ -120,7 +121,7 @@ func TestStore_GivenDeliveryLifecycle_WhenAttemptsAreRecorded_ThenPersistsHistor
 	if err := repo.ReplayFailed(ctx, failedDelivery.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.ReplayFailed(ctx, "dlv_missing"); !errors.Is(err, ErrNotFound) {
+	if err := repo.ReplayFailed(ctx, "dlv_missing"); !errors.Is(err, ports.ErrNotFound) {
 		t.Fatalf("missing replay error = %v", err)
 	}
 }
@@ -131,13 +132,5 @@ func TestStore_GivenHelperInputs_WhenNormalized_ThenReturnsExpectedValues(t *tes
 	}
 	if nullString("") != nil || nullString("value") != "value" {
 		t.Fatal("null string conversion is incorrect")
-	}
-	repo, err := Open(filepath.Join(t.TempDir(), "string.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer repo.Close()
-	if repo.String() == "" {
-		t.Fatal("store string must not be empty")
 	}
 }
