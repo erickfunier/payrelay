@@ -1,4 +1,4 @@
-package delivery_test
+package application_test
 
 import (
 	"context"
@@ -12,12 +12,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/payrelay/internal/delivery"
-	"github.com/example/payrelay/internal/domain"
-	"github.com/example/payrelay/internal/store"
+	"github.com/example/payrelay/internal/adapters/sqlite"
+	"github.com/example/payrelay/internal/adapters/webhook"
+	"github.com/example/payrelay/internal/adapters/worker"
+	"github.com/example/payrelay/internal/core/application"
+	"github.com/example/payrelay/internal/core/domain"
 )
 
-func TestDispatcher_GivenSuccessfulReceiver_WhenDispatching_ThenSignsAndRecordsDelivery(t *testing.T) {
+func TestService_GivenSuccessfulReceiver_WhenDispatching_ThenSignsAndRecordsDelivery(t *testing.T) {
 	var observedSignature, observedTimestamp string
 	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -40,7 +42,7 @@ func TestDispatcher_GivenSuccessfulReceiver_WhenDispatching_ThenSignsAndRecordsD
 	if _, _, err := repo.CreateEvent(ctx, event, "fingerprint", []domain.Endpoint{endpoint}); err != nil {
 		t.Fatal(err)
 	}
-	d := delivery.NewDispatcher(repo, receiver.Client(), 3, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d := application.NewService(repo, webhook.NewHTTPSender(receiver.Client()), 3)
 	found, err := d.DispatchOne(ctx)
 	if err != nil || !found {
 		t.Fatalf("dispatch: found=%v err=%v", found, err)
@@ -57,7 +59,7 @@ func TestDispatcher_GivenSuccessfulReceiver_WhenDispatching_ThenSignsAndRecordsD
 	}
 }
 
-func TestDispatcher_GivenFinalReceiverFailure_WhenDispatching_ThenMarksDeliveryFailed(t *testing.T) {
+func TestService_GivenFinalReceiverFailure_WhenDispatching_ThenMarksDeliveryFailed(t *testing.T) {
 	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 	}))
@@ -73,7 +75,7 @@ func TestDispatcher_GivenFinalReceiverFailure_WhenDispatching_ThenMarksDeliveryF
 	if _, _, err := repo.CreateEvent(ctx, event, "retry", []domain.Endpoint{endpoint}); err != nil {
 		t.Fatal(err)
 	}
-	d := delivery.NewDispatcher(repo, receiver.Client(), 1, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	d := application.NewService(repo, webhook.NewHTTPSender(receiver.Client()), 1)
 	if _, err := d.DispatchOne(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +89,7 @@ func TestDispatcher_GivenFinalReceiverFailure_WhenDispatching_ThenMarksDeliveryF
 	}
 }
 
-func TestDispatcher_GivenTransportOrRequestFailure_WhenDispatching_ThenRecordsFailedDelivery(t *testing.T) {
+func TestService_GivenTransportOrRequestFailure_WhenDispatching_ThenRecordsFailedDelivery(t *testing.T) {
 	repo := testStore(t)
 	defer repo.Close()
 	ctx := context.Background()
@@ -103,7 +105,7 @@ func TestDispatcher_GivenTransportOrRequestFailure_WhenDispatching_ThenRecordsFa
 	client := &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
 		return nil, errors.New("offline")
 	})}
-	dispatcher := delivery.NewDispatcher(repo, client, 1, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	dispatcher := application.NewService(repo, webhook.NewHTTPSender(client), 1)
 	if _, err := dispatcher.DispatchOne(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -129,25 +131,25 @@ func TestDispatcher_GivenTransportOrRequestFailure_WhenDispatching_ThenRecordsFa
 	}
 }
 
-func TestDispatcher_GivenNoDueWork_WhenDispatchingOrStoppingWorker_ThenReturnsCleanly(t *testing.T) {
+func TestService_GivenNoDueWork_WhenDispatchingOrStoppingWorker_ThenReturnsCleanly(t *testing.T) {
 	repo := testStore(t)
 	defer repo.Close()
-	dispatcher := delivery.NewDispatcher(repo, http.DefaultClient, 1, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	dispatcher := application.NewService(repo, webhook.NewHTTPSender(http.DefaultClient), 1)
 	if found, err := dispatcher.DispatchOne(context.Background()); err != nil || found {
 		t.Fatalf("empty dispatch: found=%v err=%v", found, err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	delivery.RunWorker(ctx, dispatcher, time.Millisecond, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	worker.Run(ctx, dispatcher, time.Millisecond, slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }
 
-func testStore(t *testing.T) *store.Store {
+func testStore(t *testing.T) *sqlite.Store {
 	t.Helper()
-	repo, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	repo, err := sqlite.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

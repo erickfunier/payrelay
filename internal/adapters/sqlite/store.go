@@ -1,20 +1,19 @@
-package store
+package sqlite
 
 import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"time"
 
-	"github.com/example/payrelay/internal/domain"
+	"github.com/example/payrelay/internal/core/domain"
+	"github.com/example/payrelay/internal/core/ports"
 	_ "modernc.org/sqlite"
 )
 
-var ErrNotFound = errors.New("not found")
-var ErrIdempotencyConflict = errors.New("idempotency key already used with a different request")
-
 type Store struct{ db *sql.DB }
+
+var _ ports.Repository = (*Store)(nil)
 
 func Open(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)")
@@ -85,7 +84,7 @@ func (s *Store) GetEndpoint(ctx context.Context, id string) (domain.Endpoint, er
 	var active int
 	err := s.db.QueryRowContext(ctx, `SELECT id,url,secret,active,created_at FROM endpoints WHERE id=?`, id).Scan(&e.ID, &e.URL, &e.Secret, &active, &created)
 	if errors.Is(err, sql.ErrNoRows) {
-		return e, ErrNotFound
+		return e, ports.ErrNotFound
 	}
 	if err != nil {
 		return e, err
@@ -106,7 +105,7 @@ func (s *Store) CreateEvent(ctx context.Context, event domain.PaymentEvent, fing
 		err = tx.QueryRowContext(ctx, `SELECT id,request_fingerprint FROM events WHERE idempotency_key=?`, event.IdempotencyKey).Scan(&id, &existingFingerprint)
 		if err == nil {
 			if existingFingerprint != fingerprint {
-				return domain.PaymentEvent{}, false, ErrIdempotencyConflict
+				return domain.PaymentEvent{}, false, ports.ErrIdempotencyConflict
 			}
 			existing, getErr := getEvent(ctx, tx, id)
 			return existing, true, getErr
@@ -146,7 +145,7 @@ func getEvent(ctx context.Context, q interface {
 func (s *Store) GetEvent(ctx context.Context, id string) (domain.PaymentEvent, error) {
 	e, err := getEvent(ctx, s.db, id)
 	if errors.Is(err, sql.ErrNoRows) {
-		return e, ErrNotFound
+		return e, ports.ErrNotFound
 	}
 	return e, err
 }
@@ -212,7 +211,7 @@ func (s *Store) RecordAttempt(ctx context.Context, deliveryID string, statusCode
 	var count int
 	err = tx.QueryRowContext(ctx, `SELECT attempt_count FROM deliveries WHERE id=? AND status='in_progress'`, deliveryID).Scan(&count)
 	if errors.Is(err, sql.ErrNoRows) {
-		return ErrNotFound
+		return ports.ErrNotFound
 	}
 	if err != nil {
 		return err
@@ -283,7 +282,7 @@ func (s *Store) ReplayFailed(ctx context.Context, deliveryID string) error {
 	}
 	changed, _ := result.RowsAffected()
 	if changed == 0 {
-		return ErrNotFound
+		return ports.ErrNotFound
 	}
 	return nil
 }
@@ -299,4 +298,3 @@ func nullString(v string) any {
 	}
 	return v
 }
-func (s *Store) String() string { return fmt.Sprintf("Store(%p)", s) }

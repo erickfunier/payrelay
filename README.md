@@ -37,14 +37,15 @@ PayRelay is a local/demo platform for synthetic events only.
 ## Architecture
 
 ```text
-REST API → SQLite (events, endpoints, deliveries, attempts)
-                    ↓
-               delivery worker → HMAC-signed HTTP POST → merchant endpoint
-                    ↑                    │
-           retry queue (backoff+jitter)  └─ 2xx succeeds; errors are recorded/retried
+Inbound adapters                 Core                    Outbound adapters
+HTTP API ────────────────→ application service ───→ SQLite repository
+worker scheduler ────────→        │              └──→ HMAC HTTP webhook sender
+                                  domain
 ```
 
-The API writes an event and its initial endpoint delivery jobs in one transaction. A background worker atomically claims due jobs, posts a signed JSON envelope, and persists every outcome. SQLite WAL mode keeps the MVP portable and locally runnable.
+PayRelay uses a ports-and-adapters (hexagonal) design. `internal/core` contains the domain, application use cases, and outbound port interfaces. `internal/adapters` contains the HTTP API, SQLite persistence, webhook transport, and worker scheduler. `cmd/server` is only the composition root that wires those pieces together.
+
+The API writes an event and its initial endpoint delivery jobs in one transaction. A background worker atomically claims due jobs, posts a signed JSON envelope, and persists every outcome. SQLite WAL mode keeps the MVP portable and locally runnable. See [the architecture guide](docs/architecture.md) for dependency rules and testing strategy.
 
 ## Quick start
 

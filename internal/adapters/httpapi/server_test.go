@@ -1,4 +1,4 @@
-package api
+package httpapi
 
 import (
 	"bytes"
@@ -11,9 +11,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/example/payrelay/internal/delivery"
-	"github.com/example/payrelay/internal/domain"
-	"github.com/example/payrelay/internal/store"
+	"github.com/example/payrelay/internal/adapters/sqlite"
+	"github.com/example/payrelay/internal/adapters/webhook"
+	"github.com/example/payrelay/internal/core/application"
+	"github.com/example/payrelay/internal/core/domain"
 )
 
 func TestAPI_GivenRegisteredEndpoint_WhenEventIsCreatedAndDispatched_ThenPersistsDeliveryHistory(t *testing.T) {
@@ -175,16 +176,16 @@ func TestAPI_GivenInvalidRequest_WhenHandled_ThenReturnsExpectedClientError(t *t
 	}
 }
 
-func testServer(t *testing.T) (http.Handler, *delivery.Dispatcher) {
+func testServer(t *testing.T) (http.Handler, *application.Service) {
 	t.Helper()
-	repo, err := store.Open(filepath.Join(t.TempDir(), "payrelay.db"))
+	repo, err := sqlite.Open(filepath.Join(t.TempDir(), "payrelay.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = repo.Close() })
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	dispatcher := delivery.NewDispatcher(repo, http.DefaultClient, 1, logger)
-	return NewServer(repo, dispatcher, logger), dispatcher
+	service := application.NewService(repo, webhook.NewHTTPSender(http.DefaultClient), 1)
+	return NewServer(service, logger), service
 }
 
 func request(t *testing.T, handler http.Handler, method, path, body string, headers map[string]string) *httptest.ResponseRecorder {
