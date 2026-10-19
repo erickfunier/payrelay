@@ -163,7 +163,7 @@ func TestAPI_GivenDocumentation_WhenRequested_ThenServesSwaggerUIAndOpenAPIContr
 		{
 			name:        "Given documentation route When OpenAPI contract is requested Then it returns YAML",
 			path:        "/docs/openapi.yaml",
-			contentType: "text/plain",
+			contentType: "application/yaml",
 			contains:    "openapi: 3.0.3",
 		},
 	}

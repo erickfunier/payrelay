@@ -37,6 +37,7 @@ func (s *Server) routes() {
 	if err != nil {
 		panic(fmt.Sprintf("load embedded API documentation: %v", err))
 	}
+	s.mux.HandleFunc("GET /docs/openapi.yaml", s.openAPI)
 	s.mux.Handle("GET /docs/", http.StripPrefix("/docs/", http.FileServerFS(swaggerFS)))
 	s.mux.HandleFunc("GET /healthz", s.health)
 	s.mux.HandleFunc("POST /v1/endpoints", s.createEndpoint)
@@ -47,6 +48,17 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/deliveries/{deliveryID}/attempts", s.listAttempts)
 	s.mux.HandleFunc("POST /v1/deliveries/{deliveryID}/replay", s.replay)
 }
+
+func (s *Server) openAPI(w http.ResponseWriter, _ *http.Request) {
+	contract, err := swaggerFiles.ReadFile("swagger/openapi.yaml")
+	if err != nil {
+		internal(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
+	_, _ = w.Write(contract)
+}
+
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
