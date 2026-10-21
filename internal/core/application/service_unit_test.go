@@ -12,6 +12,7 @@ import (
 )
 
 func TestService_GivenRepositoryPorts_WhenManagingResources_ThenDelegatesUseCases(t *testing.T) {
+	const tenantID = "merchant_alpha"
 	repository := &fakeRepository{
 		endpoints:  []domain.Endpoint{{ID: "we_existing", URL: "https://example.test", Secret: "whsec_existing", Active: true}},
 		event:      domain.PaymentEvent{ID: "evt_existing", Type: "payment.succeeded"},
@@ -21,29 +22,29 @@ func TestService_GivenRepositoryPorts_WhenManagingResources_ThenDelegatesUseCase
 	service := NewService(repository, fakeSender{}, 3)
 	ctx := context.Background()
 
-	createdEndpoint, err := service.CreateEndpoint(ctx, "https://receiver.test/webhooks")
+	createdEndpoint, err := service.CreateEndpoint(ctx, tenantID, "https://receiver.test/webhooks")
 	if err != nil || createdEndpoint.ID == "" || !strings.HasPrefix(createdEndpoint.Secret, "whsec_") || repository.createdEndpoint != createdEndpoint {
 		t.Fatalf("create endpoint: %#v (%v)", createdEndpoint, err)
 	}
-	if endpoints, err := service.ListActiveEndpoints(ctx); err != nil || len(endpoints) != 1 {
+	if endpoints, err := service.ListActiveEndpoints(ctx, tenantID); err != nil || len(endpoints) != 1 {
 		t.Fatalf("list endpoints: %#v (%v)", endpoints, err)
 	}
 
 	event := domain.PaymentEvent{ID: "evt_new", Type: "payment.succeeded", MerchantRef: "order_1", AmountCents: 1200, Currency: "USD", Status: "succeeded"}
-	createdEvent, replay, err := service.CreateEvent(ctx, event)
+	createdEvent, replay, err := service.CreateEvent(ctx, tenantID, event)
 	if err != nil || replay || createdEvent.ID != event.ID || repository.fingerprint != "payment.succeeded|order_1|1200|USD|succeeded" {
 		t.Fatalf("create event: %#v replay=%v fingerprint=%q err=%v", createdEvent, replay, repository.fingerprint, err)
 	}
-	if got, err := service.GetEvent(ctx, "evt_existing"); err != nil || got.ID != "evt_existing" {
+	if got, err := service.GetEvent(ctx, tenantID, "evt_existing"); err != nil || got.ID != "evt_existing" {
 		t.Fatalf("get event: %#v (%v)", got, err)
 	}
-	if got, err := service.ListDeliveries(ctx, "evt_existing"); err != nil || len(got) != 1 {
+	if got, err := service.ListDeliveries(ctx, tenantID, "evt_existing"); err != nil || len(got) != 1 {
 		t.Fatalf("list deliveries: %#v (%v)", got, err)
 	}
-	if got, err := service.ListAttempts(ctx, "dlv_existing"); err != nil || len(got) != 1 {
+	if got, err := service.ListAttempts(ctx, tenantID, "dlv_existing"); err != nil || len(got) != 1 {
 		t.Fatalf("list attempts: %#v (%v)", got, err)
 	}
-	if err := service.ReplayFailed(ctx, "dlv_existing"); err != nil || repository.replayedID != "dlv_existing" {
+	if err := service.ReplayFailed(ctx, tenantID, "dlv_existing"); err != nil || repository.replayedID != "dlv_existing" {
 		t.Fatalf("replay: id=%q err=%v", repository.replayedID, err)
 	}
 }
@@ -110,10 +111,10 @@ func (f *fakeRepository) CreateEndpoint(_ context.Context, endpoint domain.Endpo
 	f.createdEndpoint = endpoint
 	return nil
 }
-func (f *fakeRepository) ListActiveEndpoints(context.Context) ([]domain.Endpoint, error) {
+func (f *fakeRepository) ListActiveEndpoints(context.Context, string) ([]domain.Endpoint, error) {
 	return f.endpoints, nil
 }
-func (f *fakeRepository) GetEndpoint(context.Context, string) (domain.Endpoint, error) {
+func (f *fakeRepository) GetEndpoint(context.Context, string, string) (domain.Endpoint, error) {
 	return domain.Endpoint{}, ports.ErrNotFound
 }
 func (f *fakeRepository) CreateEvent(_ context.Context, event domain.PaymentEvent, fingerprint string, _ []domain.Endpoint) (domain.PaymentEvent, bool, error) {
@@ -121,7 +122,7 @@ func (f *fakeRepository) CreateEvent(_ context.Context, event domain.PaymentEven
 	f.fingerprint = fingerprint
 	return event, false, nil
 }
-func (f *fakeRepository) GetEvent(context.Context, string) (domain.PaymentEvent, error) {
+func (f *fakeRepository) GetEvent(context.Context, string, string) (domain.PaymentEvent, error) {
 	return f.event, nil
 }
 func (f *fakeRepository) ClaimDueDelivery(context.Context, time.Time) (domain.Delivery, domain.Endpoint, domain.PaymentEvent, bool, error) {
@@ -133,13 +134,13 @@ func (f *fakeRepository) RecordAttempt(_ context.Context, _ string, status int, 
 	f.retryAt = retryAt
 	return nil
 }
-func (f *fakeRepository) ListDeliveries(context.Context, string) ([]domain.Delivery, error) {
+func (f *fakeRepository) ListDeliveries(context.Context, string, string) ([]domain.Delivery, error) {
 	return f.deliveries, nil
 }
-func (f *fakeRepository) ListAttempts(context.Context, string) ([]domain.DeliveryAttempt, error) {
+func (f *fakeRepository) ListAttempts(context.Context, string, string) ([]domain.DeliveryAttempt, error) {
 	return f.attempts, nil
 }
-func (f *fakeRepository) ReplayFailed(_ context.Context, id string) error {
+func (f *fakeRepository) ReplayFailed(_ context.Context, _ string, id string) error {
 	f.replayedID = id
 	return nil
 }

@@ -7,10 +7,15 @@
   },
   "variable": [
     { "key": "baseUrl", "value": "http://localhost:8080" },
+    { "key": "apiKey", "value": "prk_replace_with_your_local_key" },
     { "key": "endpointId", "value": "" },
     { "key": "eventId", "value": "" },
     { "key": "deliveryId", "value": "" }
   ],
+  "auth": {
+    "type": "bearer",
+    "bearer": [{ "key": "token", "value": "{{apiKey}}", "type": "string" }]
+  },
   "item": [
     {
       "name": "Health check",

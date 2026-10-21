@@ -23,6 +23,11 @@ func main() {
 	poll := durationEnv("PAYRELAY_WORKER_POLL", 500*time.Millisecond)
 	maxAttempts := intEnv("PAYRELAY_MAX_ATTEMPTS", 5)
 	timeout := durationEnv("PAYRELAY_REQUEST_TIMEOUT", 10*time.Second)
+	authenticator, err := httpapi.NewAPIKeyAuthenticator(os.Getenv("PAYRELAY_API_KEYS"))
+	if err != nil {
+		logger.Error("configure API authentication", "error", err)
+		os.Exit(1)
+	}
 
 	repo, err := sqlite.Open(dbPath)
 	if err != nil {
@@ -36,7 +41,7 @@ func main() {
 	defer cancel()
 	go worker.Run(ctx, service, poll, logger)
 
-	server := &http.Server{Addr: env("PAYRELAY_ADDR", ":8080"), Handler: httpapi.NewServer(service, logger), ReadHeaderTimeout: 5 * time.Second}
+	server := &http.Server{Addr: env("PAYRELAY_ADDR", ":8080"), Handler: httpapi.NewServer(service, logger, authenticator), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shutdown, stop := context.WithTimeout(context.Background(), 10*time.Second)

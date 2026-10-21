@@ -3,6 +3,7 @@ package domain
 import "time"
 
 type Endpoint struct {
+	TenantID  string    `json:"-"`
 	ID        string    `json:"id"`
 	URL       string    `json:"url"`
 	Secret    string    `json:"secret,omitempty"`
@@ -11,6 +12,7 @@ type Endpoint struct {
 }
 
 type PaymentEvent struct {
+	TenantID       string    `json:"-"`
 	ID             string    `json:"id"`
 	Type           string    `json:"type"`
 	MerchantRef    string    `json:"merchant_reference"`

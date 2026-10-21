@@ -24,6 +24,13 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for branch names, review expectations, an
 - Replay failed deliveries from the API.
 - Docker, Docker Compose, CI, and focused tests for signing, retry policy, and dispatch behavior.
 
+## Phase 2: security foundation
+
+- Bearer API-key authentication for every management endpoint under `/v1`.
+- Tenant isolation: endpoints, events, idempotency keys, delivery history, and replay operations are scoped to the authenticated tenant.
+- API keys are configured through `PAYRELAY_API_KEYS`, retained only as SHA-256 digests in process memory, and compared in constant time.
+- Existing SQLite installations are migrated safely; pre-Phase-2 data is assigned to the `legacy` tenant and is not exposed to configured tenants.
+
 ## Safety boundary and threat model
 
 PayRelay is a local/demo platform for synthetic events only.
@@ -31,7 +38,7 @@ PayRelay is a local/demo platform for synthetic events only.
 - Inputs represent fictional payment state (`amount_cents`, status, and a merchant reference), never PANs, CVVs, bank credentials, or real transaction tokens.
 - It makes outbound HTTP calls only to the endpoint URL registered by the caller. Treat this as a development service: deploy behind egress controls and an allowlist to mitigate SSRF before any shared environment use.
 - Endpoint secrets are stored in SQLite in this MVP so the worker can sign deliveries. Creation is the only API response that reveals a secret; use a managed secret store and encryption at rest in a production evolution.
-- HTTPS is supported but not required locally. Production should require HTTPS, authenticate the management API, redact logs, and rotate secrets.
+- HTTPS is supported but not required locally. Production should require HTTPS, redact logs, and rotate secrets.
 - Receivers must validate the timestamp and HMAC in constant time, and reject stale requests to limit replay exposure.
 
 ## Architecture
@@ -49,13 +56,14 @@ The API writes an event and its initial endpoint delivery jobs in one transactio
 
 ## Quick start
 
-Prerequisites: Go 1.23+ (or Docker). Copy the example configuration if you want to customize it:
+Prerequisites: Go 1.23+ (or Docker). Configure at least one tenant API key before starting:
 
-```sh
-cp .env.example .env
-go mod download
+```powershell
+$env:PAYRELAY_API_KEYS = 'merchant_demo:prk_use_a_random_value_of_at_least_20_characters'
 go run ./cmd/server
 ```
+
+For Docker Compose, copy `.env.example` to `.env`, replace its placeholder key, and run `docker compose up --build`. The Go executable intentionally does not read `.env` files itself; set environment variables through your shell, IDE, container platform, or process manager.
 
 The API listens on `http://localhost:8080` by default. To run in Docker:
 
@@ -96,6 +104,7 @@ Register an endpoint (use a request-bin service or a local listener in developme
 
 ```sh
 curl -X POST http://localhost:8080/v1/endpoints \
+  -H 'Authorization: Bearer prk_use_your_configured_key' \
   -H 'Content-Type: application/json' \
   -d '{"url":"http://host.docker.internal:9000/webhooks/payrelay"}'
 ```
@@ -104,6 +113,7 @@ The response includes the `whsec_...` secret once. Create a **mock** event:
 
 ```sh
 curl -X POST http://localhost:8080/v1/events \
+  -H 'Authorization: Bearer prk_use_your_configured_key' \
   -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: demo-order-1007' \
   -d '{"type":"payment.succeeded","merchant_reference":"demo-order-1007","amount_cents":2599,"currency":"USD","status":"succeeded"}'
@@ -114,9 +124,9 @@ Repeat the same request and key to safely receive the original event. Reusing th
 Inspect delivery jobs and attempts:
 
 ```sh
-curl http://localhost:8080/v1/events/evt_example/deliveries
-curl http://localhost:8080/v1/deliveries/dlv_example/attempts
-curl -X POST http://localhost:8080/v1/deliveries/dlv_example/replay
+curl -H 'Authorization: Bearer prk_use_your_configured_key' http://localhost:8080/v1/events/evt_example/deliveries
+curl -H 'Authorization: Bearer prk_use_your_configured_key' http://localhost:8080/v1/deliveries/dlv_example/attempts
+curl -X POST -H 'Authorization: Bearer prk_use_your_configured_key' http://localhost:8080/v1/deliveries/dlv_example/replay
 ```
 
 Every webhook is a JSON envelope and includes:
@@ -143,10 +153,11 @@ X-PayRelay-Signature: sha256=<hex HMAC of "timestamp.payload">
 | `PAYRELAY_WORKER_POLL` | `500ms` | How often the worker looks for due deliveries |
 | `PAYRELAY_MAX_ATTEMPTS` | `5` | Total delivery attempts before a delivery fails |
 | `PAYRELAY_REQUEST_TIMEOUT` | `10s` | Outbound webhook HTTP timeout |
+| `PAYRELAY_API_KEYS` | required | Comma-separated `tenant-id:api-key` pairs; API keys must be at least 20 characters |
 
 ## Roadmap
 
-1. Add API authentication, merchant tenancy, endpoint updates, secret rotation, and SSRF-safe endpoint policies.
+1. Add endpoint updates, secret rotation, SSRF-safe endpoint policies, and rate limits.
 2. Move secrets to a KMS-backed store; require TLS and add structured audit logs/metrics/tracing.
 3. Introduce Postgres plus a dedicated queue for horizontal workers, DLQs, rate limiting, and endpoint circuit breaking.
 4. Add an event catalog, receiver verification SDKs, an OpenAPI spec, and load/fault-injection tests.

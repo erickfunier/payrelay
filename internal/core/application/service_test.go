@@ -20,6 +20,7 @@ import (
 )
 
 func TestService_GivenSuccessfulReceiver_WhenDispatching_ThenSignsAndRecordsDelivery(t *testing.T) {
+	const tenantID = "merchant_alpha"
 	var observedSignature, observedTimestamp string
 	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -34,11 +35,11 @@ func TestService_GivenSuccessfulReceiver_WhenDispatching_ThenSignsAndRecordsDeli
 	repo := testStore(t)
 	defer repo.Close()
 	ctx := context.Background()
-	endpoint := domain.Endpoint{ID: "we_test", URL: receiver.URL, Secret: "whsec_test", Active: true, CreatedAt: time.Now().UTC()}
+	endpoint := domain.Endpoint{TenantID: tenantID, ID: "we_test", URL: receiver.URL, Secret: "whsec_test", Active: true, CreatedAt: time.Now().UTC()}
 	if err := repo.CreateEndpoint(ctx, endpoint); err != nil {
 		t.Fatal(err)
 	}
-	event := domain.PaymentEvent{ID: "evt_test", Type: "payment.succeeded", MerchantRef: "order_42", AmountCents: 1200, Currency: "USD", Status: "succeeded", OccurredAt: time.Now().UTC()}
+	event := domain.PaymentEvent{TenantID: tenantID, ID: "evt_test", Type: "payment.succeeded", MerchantRef: "order_42", AmountCents: 1200, Currency: "USD", Status: "succeeded", OccurredAt: time.Now().UTC()}
 	if _, _, err := repo.CreateEvent(ctx, event, "fingerprint", []domain.Endpoint{endpoint}); err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +48,7 @@ func TestService_GivenSuccessfulReceiver_WhenDispatching_ThenSignsAndRecordsDeli
 	if err != nil || !found {
 		t.Fatalf("dispatch: found=%v err=%v", found, err)
 	}
-	deliveries, err := repo.ListDeliveries(ctx, event.ID)
+	deliveries, err := repo.ListDeliveries(ctx, tenantID, event.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,6 +61,7 @@ func TestService_GivenSuccessfulReceiver_WhenDispatching_ThenSignsAndRecordsDeli
 }
 
 func TestService_GivenFinalReceiverFailure_WhenDispatching_ThenMarksDeliveryFailed(t *testing.T) {
+	const tenantID = "merchant_alpha"
 	receiver := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 	}))
@@ -67,11 +69,11 @@ func TestService_GivenFinalReceiverFailure_WhenDispatching_ThenMarksDeliveryFail
 	repo := testStore(t)
 	defer repo.Close()
 	ctx := context.Background()
-	endpoint := domain.Endpoint{ID: "we_retry", URL: receiver.URL, Secret: "whsec_retry", Active: true, CreatedAt: time.Now().UTC()}
+	endpoint := domain.Endpoint{TenantID: tenantID, ID: "we_retry", URL: receiver.URL, Secret: "whsec_retry", Active: true, CreatedAt: time.Now().UTC()}
 	if err := repo.CreateEndpoint(ctx, endpoint); err != nil {
 		t.Fatal(err)
 	}
-	event := domain.PaymentEvent{ID: "evt_retry", Type: "payment.failed", MerchantRef: "order_43", AmountCents: 100, Currency: "USD", Status: "failed", OccurredAt: time.Now().UTC()}
+	event := domain.PaymentEvent{TenantID: tenantID, ID: "evt_retry", Type: "payment.failed", MerchantRef: "order_43", AmountCents: 100, Currency: "USD", Status: "failed", OccurredAt: time.Now().UTC()}
 	if _, _, err := repo.CreateEvent(ctx, event, "retry", []domain.Endpoint{endpoint}); err != nil {
 		t.Fatal(err)
 	}
@@ -79,26 +81,27 @@ func TestService_GivenFinalReceiverFailure_WhenDispatching_ThenMarksDeliveryFail
 	if _, err := d.DispatchOne(ctx); err != nil {
 		t.Fatal(err)
 	}
-	deliveries, _ := repo.ListDeliveries(ctx, event.ID)
+	deliveries, _ := repo.ListDeliveries(ctx, tenantID, event.ID)
 	if deliveries[0].Status != "failed" || deliveries[0].AttemptCount != 1 {
 		t.Fatalf("unexpected delivery: %#v", deliveries[0])
 	}
-	attempts, err := repo.ListAttempts(ctx, deliveries[0].ID)
+	attempts, err := repo.ListAttempts(ctx, tenantID, deliveries[0].ID)
 	if err != nil || len(attempts) != 1 || attempts[0].StatusCode != 503 {
 		t.Fatalf("unexpected attempts: %#v (%v)", attempts, err)
 	}
 }
 
 func TestService_GivenTransportOrRequestFailure_WhenDispatching_ThenRecordsFailedDelivery(t *testing.T) {
+	const tenantID = "merchant_alpha"
 	repo := testStore(t)
 	defer repo.Close()
 	ctx := context.Background()
 
-	networkEndpoint := domain.Endpoint{ID: "we_network", URL: "https://receiver.test", Secret: "whsec_network", Active: true, CreatedAt: time.Now().UTC()}
+	networkEndpoint := domain.Endpoint{TenantID: tenantID, ID: "we_network", URL: "https://receiver.test", Secret: "whsec_network", Active: true, CreatedAt: time.Now().UTC()}
 	if err := repo.CreateEndpoint(ctx, networkEndpoint); err != nil {
 		t.Fatal(err)
 	}
-	networkEvent := domain.PaymentEvent{ID: "evt_network", Type: "payment.failed", MerchantRef: "order_network", AmountCents: 100, Currency: "USD", Status: "failed", OccurredAt: time.Now().UTC()}
+	networkEvent := domain.PaymentEvent{TenantID: tenantID, ID: "evt_network", Type: "payment.failed", MerchantRef: "order_network", AmountCents: 100, Currency: "USD", Status: "failed", OccurredAt: time.Now().UTC()}
 	if _, _, err := repo.CreateEvent(ctx, networkEvent, "network", []domain.Endpoint{networkEndpoint}); err != nil {
 		t.Fatal(err)
 	}
@@ -109,23 +112,23 @@ func TestService_GivenTransportOrRequestFailure_WhenDispatching_ThenRecordsFaile
 	if _, err := dispatcher.DispatchOne(ctx); err != nil {
 		t.Fatal(err)
 	}
-	deliveries, err := repo.ListDeliveries(ctx, networkEvent.ID)
+	deliveries, err := repo.ListDeliveries(ctx, tenantID, networkEvent.ID)
 	if err != nil || deliveries[0].Status != "failed" || !strings.Contains(deliveries[0].LastError, "offline") {
 		t.Fatalf("network delivery: %#v (%v)", deliveries, err)
 	}
 
-	invalidEndpoint := domain.Endpoint{ID: "we_invalid", URL: ":// invalid", Secret: "whsec_invalid", Active: true, CreatedAt: time.Now().UTC()}
+	invalidEndpoint := domain.Endpoint{TenantID: tenantID, ID: "we_invalid", URL: ":// invalid", Secret: "whsec_invalid", Active: true, CreatedAt: time.Now().UTC()}
 	if err := repo.CreateEndpoint(ctx, invalidEndpoint); err != nil {
 		t.Fatal(err)
 	}
-	invalidEvent := domain.PaymentEvent{ID: "evt_invalid", Type: "payment.failed", MerchantRef: "order_invalid", AmountCents: 100, Currency: "USD", Status: "failed", OccurredAt: time.Now().UTC()}
+	invalidEvent := domain.PaymentEvent{TenantID: tenantID, ID: "evt_invalid", Type: "payment.failed", MerchantRef: "order_invalid", AmountCents: 100, Currency: "USD", Status: "failed", OccurredAt: time.Now().UTC()}
 	if _, _, err := repo.CreateEvent(ctx, invalidEvent, "invalid", []domain.Endpoint{invalidEndpoint}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := dispatcher.DispatchOne(ctx); err != nil {
 		t.Fatal(err)
 	}
-	deliveries, err = repo.ListDeliveries(ctx, invalidEvent.ID)
+	deliveries, err = repo.ListDeliveries(ctx, tenantID, invalidEvent.ID)
 	if err != nil || deliveries[0].Status != "failed" || deliveries[0].LastError == "" {
 		t.Fatalf("invalid URL delivery: %#v (%v)", deliveries, err)
 	}
