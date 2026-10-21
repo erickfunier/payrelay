@@ -9,6 +9,7 @@ type Endpoint struct {
 	Secret    string    `json:"secret,omitempty"`
 	Active    bool      `json:"active"`
 	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type PaymentEvent struct {

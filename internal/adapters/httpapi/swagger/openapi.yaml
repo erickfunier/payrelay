@@ -42,6 +42,44 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Endpoint' }
         '400': { $ref: '#/components/responses/BadRequest' }
+  /v1/endpoints/{endpointID}:
+    get:
+      summary: Get a webhook endpoint
+      parameters: [{ $ref: '#/components/parameters/EndpointID' }]
+      responses:
+        '200':
+          description: Endpoint; signing secret is omitted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Endpoint' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      summary: Enable or disable a webhook endpoint
+      parameters: [{ $ref: '#/components/parameters/EndpointID' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateEndpointRequest' }
+      responses:
+        '200':
+          description: Endpoint lifecycle updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Endpoint' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/endpoints/{endpointID}/rotate-secret:
+    post:
+      summary: Rotate a webhook signing secret
+      parameters: [{ $ref: '#/components/parameters/EndpointID' }]
+      responses:
+        '200':
+          description: Endpoint with its new one-time secret
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Endpoint' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /v1/events:
     post:
       summary: Create a mock payment event
@@ -136,6 +174,12 @@ components:
       required: true
       schema: { type: string }
       example: evt_2dbf9c5af20d
+    EndpointID:
+      name: endpointID
+      in: path
+      required: true
+      schema: { type: string }
+      example: we_84fa814a3d20
     DeliveryID:
       name: deliveryID
       in: path
@@ -177,6 +221,11 @@ components:
       type: object
       properties:
         data: { type: array, items: { $ref: '#/components/schemas/Endpoint' } }
+    UpdateEndpointRequest:
+      type: object
+      required: [active]
+      properties:
+        active: { type: boolean, example: false }
     CreateEventRequest:
       type: object
       required: [type, merchant_reference, amount_cents, currency, status]

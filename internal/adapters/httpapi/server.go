@@ -44,6 +44,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /healthz", s.health)
 	s.handleAuthenticated("POST /v1/endpoints", s.createEndpoint)
 	s.handleAuthenticated("GET /v1/endpoints", s.listEndpoints)
+	s.handleAuthenticated("GET /v1/endpoints/{endpointID}", s.getEndpoint)
+	s.handleAuthenticated("PATCH /v1/endpoints/{endpointID}", s.updateEndpoint)
+	s.handleAuthenticated("POST /v1/endpoints/{endpointID}/rotate-secret", s.rotateEndpointSecret)
 	s.handleAuthenticated("POST /v1/events", s.createEvent)
 	s.handleAuthenticated("GET /v1/events/{eventID}", s.getEvent)
 	s.handleAuthenticated("GET /v1/events/{eventID}/deliveries", s.listDeliveries)
@@ -107,7 +110,7 @@ func (s *Server) createEndpoint(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, endpoint)
 }
 func (s *Server) listEndpoints(w http.ResponseWriter, r *http.Request) {
-	endpoints, err := s.service.ListActiveEndpoints(r.Context(), tenantID(r.Context()))
+	endpoints, err := s.service.ListEndpoints(r.Context(), tenantID(r.Context()))
 	if err != nil {
 		internal(w, err)
 		return
@@ -116,6 +119,60 @@ func (s *Server) listEndpoints(w http.ResponseWriter, r *http.Request) {
 		endpoints[i].Secret = ""
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": endpoints})
+}
+
+func (s *Server) getEndpoint(w http.ResponseWriter, r *http.Request) {
+	endpoint, err := s.service.GetEndpoint(r.Context(), tenantID(r.Context()), r.PathValue("endpointID"))
+	if errors.Is(err, ports.ErrNotFound) {
+		notFound(w)
+		return
+	}
+	if err != nil {
+		internal(w, err)
+		return
+	}
+	endpoint.Secret = ""
+	writeJSON(w, http.StatusOK, endpoint)
+}
+
+type endpointUpdateInput struct {
+	Active *bool `json:"active"`
+}
+
+func (s *Server) updateEndpoint(w http.ResponseWriter, r *http.Request) {
+	var input endpointUpdateInput
+	if err := decode(r, &input); err != nil {
+		bad(w, err)
+		return
+	}
+	if input.Active == nil {
+		bad(w, errors.New("active is required"))
+		return
+	}
+	endpoint, err := s.service.SetEndpointActive(r.Context(), tenantID(r.Context()), r.PathValue("endpointID"), *input.Active)
+	if errors.Is(err, ports.ErrNotFound) {
+		notFound(w)
+		return
+	}
+	if err != nil {
+		internal(w, err)
+		return
+	}
+	endpoint.Secret = ""
+	writeJSON(w, http.StatusOK, endpoint)
+}
+
+func (s *Server) rotateEndpointSecret(w http.ResponseWriter, r *http.Request) {
+	endpoint, err := s.service.RotateEndpointSecret(r.Context(), tenantID(r.Context()), r.PathValue("endpointID"))
+	if errors.Is(err, ports.ErrNotFound) {
+		notFound(w)
+		return
+	}
+	if err != nil {
+		internal(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, endpoint)
 }
 
 type eventInput struct {

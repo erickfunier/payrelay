@@ -64,6 +64,29 @@ func TestStore_GivenDeliveryLifecycle_WhenAttemptsAreRecorded_ThenPersistsHistor
 	if _, err := repo.GetEndpoint(ctx, tenantID, "we_missing"); !errors.Is(err, ports.ErrNotFound) {
 		t.Fatalf("missing endpoint error = %v", err)
 	}
+	allEndpoints, err := repo.ListEndpoints(ctx, tenantID)
+	if err != nil || len(allEndpoints) != 1 {
+		t.Fatalf("all endpoints: %#v (%v)", allEndpoints, err)
+	}
+	if _, err := repo.SetEndpointActive(ctx, tenantID, endpoint.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if active, err := repo.ListActiveEndpoints(ctx, tenantID); err != nil || len(active) != 0 {
+		t.Fatalf("disabled active endpoints: %#v (%v)", active, err)
+	}
+	rotated, err := repo.RotateEndpointSecret(ctx, tenantID, endpoint.ID, "whsec_rotated")
+	if err != nil || rotated.Secret != "whsec_rotated" || rotated.Active {
+		t.Fatalf("rotated endpoint: %#v (%v)", rotated, err)
+	}
+	if _, err := repo.SetEndpointActive(ctx, tenantID, endpoint.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.SetEndpointActive(ctx, tenantID, "we_missing", true); !errors.Is(err, ports.ErrNotFound) {
+		t.Fatalf("missing endpoint update error = %v", err)
+	}
+	if _, err := repo.RotateEndpointSecret(ctx, tenantID, "we_missing", "whsec_missing"); !errors.Is(err, ports.ErrNotFound) {
+		t.Fatalf("missing endpoint rotation error = %v", err)
+	}
 
 	event := domain.PaymentEvent{TenantID: tenantID, ID: "evt_lifecycle", Type: "payment.succeeded", MerchantRef: "order_lifecycle", AmountCents: 700, Currency: "USD", Status: "succeeded", OccurredAt: now}
 	if _, replay, err := repo.CreateEvent(ctx, event, "lifecycle", endpoints); err != nil || replay {
