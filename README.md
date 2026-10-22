@@ -31,6 +31,12 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for branch names, review expectations, an
 - API keys are configured through `PAYRELAY_API_KEYS`, retained only as SHA-256 digests in process memory, and compared in constant time.
 - Existing SQLite installations are migrated safely; pre-Phase-2 data is assigned to the `legacy` tenant and is not exposed to configured tenants.
 
+## Phase 3: endpoint lifecycle (in progress)
+
+- Enable or disable a tenant's webhook endpoint without deleting its delivery history.
+- Rotate a signing secret on demand; the replacement secret is returned exactly once.
+- The next Phase 3 increment adds strict outbound target validation and SSRF controls.
+
 ## Safety boundary and threat model
 
 PayRelay is a local/demo platform for synthetic events only.

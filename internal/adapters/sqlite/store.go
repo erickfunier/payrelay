@@ -33,7 +33,7 @@ func (s *Store) Close() error { return s.db.Close() }
 func (s *Store) migrate(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS endpoints (
- id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'legacy', url TEXT NOT NULL, secret TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL
+ id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'legacy', url TEXT NOT NULL, secret TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS events (
  id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'legacy', type TEXT NOT NULL, merchant_reference TEXT NOT NULL, amount_cents INTEGER NOT NULL,
@@ -57,10 +57,13 @@ CREATE INDEX IF NOT EXISTS attempts_delivery_idx ON delivery_attempts(delivery_i
 	if err := addColumnIfMissing(ctx, s.db, "endpoints", "tenant_id", "TEXT NOT NULL DEFAULT 'legacy'"); err != nil {
 		return err
 	}
+	if err := addColumnIfMissing(ctx, s.db, "endpoints", "updated_at", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
 	if err := addColumnIfMissing(ctx, s.db, "events", "tenant_id", "TEXT NOT NULL DEFAULT 'legacy'"); err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS endpoints_tenant_active_idx ON endpoints(tenant_id, active); CREATE INDEX IF NOT EXISTS events_tenant_idx ON events(tenant_id);`)
+	_, err = s.db.ExecContext(ctx, `UPDATE endpoints SET updated_at=created_at WHERE updated_at=0; CREATE INDEX IF NOT EXISTS endpoints_tenant_active_idx ON endpoints(tenant_id, active); CREATE INDEX IF NOT EXISTS events_tenant_idx ON events(tenant_id);`)
 	return err
 }
 
@@ -90,11 +93,25 @@ func addColumnIfMissing(ctx context.Context, db *sql.DB, table, column, definiti
 }
 
 func (s *Store) CreateEndpoint(ctx context.Context, endpoint domain.Endpoint) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO endpoints(id,tenant_id,url,secret,active,created_at) VALUES(?,?,?,?,?,?)`, endpoint.ID, endpoint.TenantID, endpoint.URL, endpoint.Secret, boolInt(endpoint.Active), endpoint.CreatedAt.Unix())
+	_, err := s.db.ExecContext(ctx, `INSERT INTO endpoints(id,tenant_id,url,secret,active,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`, endpoint.ID, endpoint.TenantID, endpoint.URL, endpoint.Secret, boolInt(endpoint.Active), endpoint.CreatedAt.Unix(), endpoint.UpdatedAt.Unix())
 	return err
 }
+
+func (s *Store) ListEndpoints(ctx context.Context, tenantID string) ([]domain.Endpoint, error) {
+	return s.listEndpoints(ctx, tenantID, false)
+}
+
 func (s *Store) ListActiveEndpoints(ctx context.Context, tenantID string) ([]domain.Endpoint, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT tenant_id,id,url,secret,active,created_at FROM endpoints WHERE tenant_id=? AND active=1 ORDER BY created_at`, tenantID)
+	return s.listEndpoints(ctx, tenantID, true)
+}
+
+func (s *Store) listEndpoints(ctx context.Context, tenantID string, activeOnly bool) ([]domain.Endpoint, error) {
+	query := `SELECT tenant_id,id,url,secret,active,created_at,updated_at FROM endpoints WHERE tenant_id=?`
+	if activeOnly {
+		query += ` AND active=1`
+	}
+	query += ` ORDER BY created_at`
+	rows, err := s.db.QueryContext(ctx, query, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -102,13 +119,14 @@ func (s *Store) ListActiveEndpoints(ctx context.Context, tenantID string) ([]dom
 	var endpoints []domain.Endpoint
 	for rows.Next() {
 		var e domain.Endpoint
-		var created int64
+		var created, updated int64
 		var active int
-		if err := rows.Scan(&e.TenantID, &e.ID, &e.URL, &e.Secret, &active, &created); err != nil {
+		if err := rows.Scan(&e.TenantID, &e.ID, &e.URL, &e.Secret, &active, &created, &updated); err != nil {
 			return nil, err
 		}
 		e.Active = active == 1
 		e.CreatedAt = time.Unix(created, 0).UTC()
+		e.UpdatedAt = time.Unix(updated, 0).UTC()
 		endpoints = append(endpoints, e)
 	}
 	return endpoints, rows.Err()
@@ -117,7 +135,8 @@ func (s *Store) GetEndpoint(ctx context.Context, tenantID, id string) (domain.En
 	var e domain.Endpoint
 	var created int64
 	var active int
-	err := s.db.QueryRowContext(ctx, `SELECT tenant_id,id,url,secret,active,created_at FROM endpoints WHERE tenant_id=? AND id=?`, tenantID, id).Scan(&e.TenantID, &e.ID, &e.URL, &e.Secret, &active, &created)
+	var updated int64
+	err := s.db.QueryRowContext(ctx, `SELECT tenant_id,id,url,secret,active,created_at,updated_at FROM endpoints WHERE tenant_id=? AND id=?`, tenantID, id).Scan(&e.TenantID, &e.ID, &e.URL, &e.Secret, &active, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return e, ports.ErrNotFound
 	}
@@ -126,7 +145,34 @@ func (s *Store) GetEndpoint(ctx context.Context, tenantID, id string) (domain.En
 	}
 	e.Active = active == 1
 	e.CreatedAt = time.Unix(created, 0).UTC()
+	e.UpdatedAt = time.Unix(updated, 0).UTC()
 	return e, nil
+}
+
+func (s *Store) SetEndpointActive(ctx context.Context, tenantID, id string, active bool) (domain.Endpoint, error) {
+	now := time.Now().UTC()
+	result, err := s.db.ExecContext(ctx, `UPDATE endpoints SET active=?,updated_at=? WHERE tenant_id=? AND id=?`, boolInt(active), now.Unix(), tenantID, id)
+	if err != nil {
+		return domain.Endpoint{}, err
+	}
+	changed, _ := result.RowsAffected()
+	if changed == 0 {
+		return domain.Endpoint{}, ports.ErrNotFound
+	}
+	return s.GetEndpoint(ctx, tenantID, id)
+}
+
+func (s *Store) RotateEndpointSecret(ctx context.Context, tenantID, id, secret string) (domain.Endpoint, error) {
+	now := time.Now().UTC()
+	result, err := s.db.ExecContext(ctx, `UPDATE endpoints SET secret=?,updated_at=? WHERE tenant_id=? AND id=?`, secret, now.Unix(), tenantID, id)
+	if err != nil {
+		return domain.Endpoint{}, err
+	}
+	changed, _ := result.RowsAffected()
+	if changed == 0 {
+		return domain.Endpoint{}, ports.ErrNotFound
+	}
+	return s.GetEndpoint(ctx, tenantID, id)
 }
 
 func (s *Store) CreateEvent(ctx context.Context, event domain.PaymentEvent, fingerprint string, endpoints []domain.Endpoint) (domain.PaymentEvent, bool, error) {

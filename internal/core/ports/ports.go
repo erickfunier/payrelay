@@ -15,8 +15,11 @@ var ErrIdempotencyConflict = errors.New("idempotency key already used with a dif
 // Adapters may persist data in SQLite today and another database tomorrow.
 type Repository interface {
 	CreateEndpoint(context.Context, domain.Endpoint) error
+	ListEndpoints(context.Context, string) ([]domain.Endpoint, error)
 	ListActiveEndpoints(context.Context, string) ([]domain.Endpoint, error)
 	GetEndpoint(context.Context, string, string) (domain.Endpoint, error)
+	SetEndpointActive(context.Context, string, string, bool) (domain.Endpoint, error)
+	RotateEndpointSecret(context.Context, string, string, string) (domain.Endpoint, error)
 	CreateEvent(context.Context, domain.PaymentEvent, string, []domain.Endpoint) (domain.PaymentEvent, bool, error)
 	GetEvent(context.Context, string, string) (domain.PaymentEvent, error)
 	ClaimDueDelivery(context.Context, time.Time) (domain.Delivery, domain.Endpoint, domain.PaymentEvent, bool, error)

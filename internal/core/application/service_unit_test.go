@@ -26,8 +26,20 @@ func TestService_GivenRepositoryPorts_WhenManagingResources_ThenDelegatesUseCase
 	if err != nil || createdEndpoint.ID == "" || !strings.HasPrefix(createdEndpoint.Secret, "whsec_") || repository.createdEndpoint != createdEndpoint {
 		t.Fatalf("create endpoint: %#v (%v)", createdEndpoint, err)
 	}
+	if endpoints, err := service.ListEndpoints(ctx, tenantID); err != nil || len(endpoints) != 1 {
+		t.Fatalf("list endpoints: %#v (%v)", endpoints, err)
+	}
 	if endpoints, err := service.ListActiveEndpoints(ctx, tenantID); err != nil || len(endpoints) != 1 {
 		t.Fatalf("list endpoints: %#v (%v)", endpoints, err)
+	}
+	if endpoint, err := service.GetEndpoint(ctx, tenantID, "we_existing"); err != nil || endpoint.ID != "we_existing" {
+		t.Fatalf("get endpoint: %#v (%v)", endpoint, err)
+	}
+	if endpoint, err := service.SetEndpointActive(ctx, tenantID, "we_existing", false); err != nil || endpoint.Active {
+		t.Fatalf("disable endpoint: %#v (%v)", endpoint, err)
+	}
+	if endpoint, err := service.RotateEndpointSecret(ctx, tenantID, "we_existing"); err != nil || !strings.HasPrefix(endpoint.Secret, "whsec_") {
+		t.Fatalf("rotate endpoint: %#v (%v)", endpoint, err)
 	}
 
 	event := domain.PaymentEvent{ID: "evt_new", Type: "payment.succeeded", MerchantRef: "order_1", AmountCents: 1200, Currency: "USD", Status: "succeeded"}
@@ -111,11 +123,27 @@ func (f *fakeRepository) CreateEndpoint(_ context.Context, endpoint domain.Endpo
 	f.createdEndpoint = endpoint
 	return nil
 }
+func (f *fakeRepository) ListEndpoints(context.Context, string) ([]domain.Endpoint, error) {
+	return f.endpoints, nil
+}
 func (f *fakeRepository) ListActiveEndpoints(context.Context, string) ([]domain.Endpoint, error) {
 	return f.endpoints, nil
 }
 func (f *fakeRepository) GetEndpoint(context.Context, string, string) (domain.Endpoint, error) {
-	return domain.Endpoint{}, ports.ErrNotFound
+	if len(f.endpoints) == 0 {
+		return domain.Endpoint{}, ports.ErrNotFound
+	}
+	return f.endpoints[0], nil
+}
+func (f *fakeRepository) SetEndpointActive(context.Context, string, string, bool) (domain.Endpoint, error) {
+	endpoint, err := f.GetEndpoint(context.Background(), "", "")
+	endpoint.Active = false
+	return endpoint, err
+}
+func (f *fakeRepository) RotateEndpointSecret(_ context.Context, _ string, _ string, secret string) (domain.Endpoint, error) {
+	endpoint, err := f.GetEndpoint(context.Background(), "", "")
+	endpoint.Secret = secret
+	return endpoint, err
 }
 func (f *fakeRepository) CreateEvent(_ context.Context, event domain.PaymentEvent, fingerprint string, _ []domain.Endpoint) (domain.PaymentEvent, bool, error) {
 	f.createdEvent = event

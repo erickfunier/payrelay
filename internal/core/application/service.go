@@ -28,7 +28,8 @@ func (s *Service) CreateEndpoint(ctx context.Context, tenantID, rawURL string) (
 	if err != nil {
 		return domain.Endpoint{}, err
 	}
-	endpoint := domain.Endpoint{TenantID: tenantID, ID: domain.NewID("we"), URL: rawURL, Secret: secret, Active: true, CreatedAt: time.Now().UTC()}
+	now := time.Now().UTC()
+	endpoint := domain.Endpoint{TenantID: tenantID, ID: domain.NewID("we"), URL: rawURL, Secret: secret, Active: true, CreatedAt: now, UpdatedAt: now}
 	if err := s.repository.CreateEndpoint(ctx, endpoint); err != nil {
 		return domain.Endpoint{}, err
 	}
@@ -37,6 +38,26 @@ func (s *Service) CreateEndpoint(ctx context.Context, tenantID, rawURL string) (
 
 func (s *Service) ListActiveEndpoints(ctx context.Context, tenantID string) ([]domain.Endpoint, error) {
 	return s.repository.ListActiveEndpoints(ctx, tenantID)
+}
+
+func (s *Service) ListEndpoints(ctx context.Context, tenantID string) ([]domain.Endpoint, error) {
+	return s.repository.ListEndpoints(ctx, tenantID)
+}
+
+func (s *Service) GetEndpoint(ctx context.Context, tenantID, endpointID string) (domain.Endpoint, error) {
+	return s.repository.GetEndpoint(ctx, tenantID, endpointID)
+}
+
+func (s *Service) SetEndpointActive(ctx context.Context, tenantID, endpointID string, active bool) (domain.Endpoint, error) {
+	return s.repository.SetEndpointActive(ctx, tenantID, endpointID, active)
+}
+
+func (s *Service) RotateEndpointSecret(ctx context.Context, tenantID, endpointID string) (domain.Endpoint, error) {
+	secret, err := newSecret()
+	if err != nil {
+		return domain.Endpoint{}, err
+	}
+	return s.repository.RotateEndpointSecret(ctx, tenantID, endpointID, secret)
 }
 
 func (s *Service) CreateEvent(ctx context.Context, tenantID string, event domain.PaymentEvent) (domain.PaymentEvent, bool, error) {

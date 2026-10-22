@@ -138,6 +138,57 @@ func TestAPI_GivenFailedDelivery_WhenReplayed_ThenQueuesDeliveryAgain(t *testing
 	}
 }
 
+func TestAPI_GivenEndpoint_WhenDisabledAndRotated_ThenUpdatesLifecycleWithoutLeakingSecrets(t *testing.T) {
+	handler, _ := testServer(t)
+	created := request(t, handler, http.MethodPost, "/v1/endpoints", `{"url":"https://receiver.example.test/webhooks"}`, nil)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create endpoint: %d %s", created.Code, created.Body.String())
+	}
+	var endpoint domain.Endpoint
+	decodeJSON(t, created.Body.Bytes(), &endpoint)
+	got := request(t, handler, http.MethodGet, "/v1/endpoints/"+endpoint.ID, "", nil)
+	if got.Code != http.StatusOK || bytes.Contains(got.Body.Bytes(), []byte(endpoint.Secret)) {
+		t.Fatalf("get endpoint: %d %s", got.Code, got.Body.String())
+	}
+
+	disabled := request(t, handler, http.MethodPatch, "/v1/endpoints/"+endpoint.ID, `{"active":false}`, nil)
+	if disabled.Code != http.StatusOK || !strings.Contains(disabled.Body.String(), `"active":false`) || bytes.Contains(disabled.Body.Bytes(), []byte(endpoint.Secret)) {
+		t.Fatalf("disable endpoint: %d %s", disabled.Code, disabled.Body.String())
+	}
+	listed := request(t, handler, http.MethodGet, "/v1/endpoints", "", nil)
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"active":false`) {
+		t.Fatalf("list endpoints: %d %s", listed.Code, listed.Body.String())
+	}
+
+	rotated := request(t, handler, http.MethodPost, "/v1/endpoints/"+endpoint.ID+"/rotate-secret", "", nil)
+	var rotatedEndpoint domain.Endpoint
+	decodeJSON(t, rotated.Body.Bytes(), &rotatedEndpoint)
+	if rotated.Code != http.StatusOK || rotatedEndpoint.Secret == "" || rotatedEndpoint.Secret == endpoint.Secret || rotatedEndpoint.Active {
+		t.Fatalf("rotate endpoint: %d %#v", rotated.Code, rotatedEndpoint)
+	}
+
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "Given unknown endpoint When updating Then it returns not found", path: "/v1/endpoints/we_missing", body: `{"active":true}`},
+		{name: "Given missing active field When updating Then it returns bad request", path: "/v1/endpoints/" + endpoint.ID, body: `{}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			response := request(t, handler, http.MethodPatch, tt.path, tt.body, nil)
+			want := http.StatusNotFound
+			if tt.body == `{}` {
+				want = http.StatusBadRequest
+			}
+			if response.Code != want {
+				t.Fatalf("status = %d, want %d: %s", response.Code, want, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestAPI_GivenHealthCheck_WhenRequested_ThenReturnsOK(t *testing.T) {
 	handler, _ := testServer(t)
 	if response := request(t, handler, http.MethodGet, "/healthz", "", nil); response.Code != http.StatusOK {
