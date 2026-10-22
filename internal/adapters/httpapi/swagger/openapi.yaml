@@ -21,10 +21,10 @@ paths:
               schema: { $ref: '#/components/schemas/Health' }
   /v1/endpoints:
     get:
-      summary: List active webhook endpoints
+      summary: List webhook endpoints
       responses:
         '200':
-          description: Active endpoints; signing secrets are omitted
+          description: Active and disabled endpoints; signing secrets are omitted
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EndpointList' }
@@ -210,13 +210,14 @@ components:
         url: { type: string, format: uri, example: http://localhost:9000/webhooks/payrelay }
     Endpoint:
       type: object
-      required: [id, url, active, created_at]
+      required: [id, url, active, created_at, updated_at]
       properties:
         id: { type: string, example: we_84fa814a3d20 }
         url: { type: string, format: uri }
-        secret: { type: string, description: Returned only when creating an endpoint., example: whsec_0b62d9c2e8 }
+        secret: { type: string, description: Returned only when creating an endpoint or rotating its secret., example: whsec_0b62d9c2e8 }
         active: { type: boolean, example: true }
         created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
     EndpointList:
       type: object
       properties:
