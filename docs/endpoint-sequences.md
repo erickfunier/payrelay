@@ -284,28 +284,19 @@ sequenceDiagram
     participant Worker as Worker scheduler
     participant App as Application service
     participant DB as SQLite
-    participant Sender as Safe HTTP sender
-    participant DNS as Target policy + DNS
+    participant Sender as HMAC HTTP sender
     participant Receiver as Public webhook receiver
     Worker->>App: DispatchOne()
     App->>DB: atomically claim due delivery
     DB-->>App: delivery, endpoint, event
     App->>Sender: Send signed JSON envelope
-    Sender->>DNS: resolve and validate target immediately before dial
-    alt unsafe target or DNS answer
-        DNS-->>Sender: reject before request
-        Sender-->>App: delivery error
+    Sender->>Receiver: POST signed webhook
+    Receiver-->>Sender: HTTP response
+    alt 2xx response
+        Sender-->>App: success
+        App->>DB: record successful attempt
+    else non-2xx or network failure
+        Sender-->>App: failure
         App->>DB: record failed attempt / schedule retry
-    else approved public target
-        DNS-->>Sender: approved public IP
-        Sender->>Receiver: POST signed webhook (no redirects)
-        Receiver-->>Sender: HTTP response
-        alt 2xx response
-            Sender-->>App: success
-            App->>DB: record successful attempt
-        else non-2xx or network failure
-            Sender-->>App: failure
-            App->>DB: record failed attempt / schedule retry
-        end
     end
 ```
