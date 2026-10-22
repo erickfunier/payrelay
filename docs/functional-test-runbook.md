@@ -7,14 +7,14 @@ This guide demonstrates the complete mock-only PayRelay flow with real HTTP requ
 In one terminal, start the API. Setting one attempt makes the failed-delivery example deterministic. Configure a local tenant and API key; all management requests except `/healthz` require it.
 
 ```sh
-PAYRELAY_MAX_ATTEMPTS=1 PAYRELAY_API_KEYS=merchant_demo:prk_local_demo_key_0123456789 go run ./cmd/server
+PAYRELAY_MAX_ATTEMPTS=1 PAYRELAY_API_KEYS=merchant_demo:prk_local_demo_key_0123456789,merchant_other:prk_other_demo_key_0123456789 go run ./cmd/server
 ```
 
 On PowerShell:
 
 ```powershell
 $env:PAYRELAY_MAX_ATTEMPTS = "1"
-$env:PAYRELAY_API_KEYS = "merchant_demo:prk_local_demo_key_0123456789"
+$env:PAYRELAY_API_KEYS = "merchant_demo:prk_local_demo_key_0123456789,merchant_other:prk_other_demo_key_0123456789"
 go run ./cmd/server
 ```
 
@@ -40,6 +40,7 @@ Set `RECEIVER_URL` to an HTTP request inspector or a small local receiver that r
 ```sh
 export RECEIVER_URL="https://your-test-receiver.example/webhooks/payrelay"
 export API_KEY="prk_local_demo_key_0123456789"
+export OTHER_API_KEY="prk_other_demo_key_0123456789"
 curl -i -X POST http://localhost:8080/v1/endpoints \
   -H "Authorization: Bearer ${API_KEY}" \
   -H 'Content-Type: application/json' \
@@ -60,7 +61,84 @@ Expected response (`201 Created`; values vary):
 
 Save the returned secret securely. PayRelay returns it only at endpoint creation; endpoint listings intentionally omit it.
 
-## 3. Create a fictional payment event
+## 3. Verify endpoint lifecycle and secret rotation
+
+Set `ENDPOINT_ID` and `FIRST_SECRET` from the response in step 2. The following requests are safe to run against the test endpoint; no secret is sent to the receiver.
+
+First, verify that a normal retrieval redacts the secret:
+
+```sh
+export ENDPOINT_ID="we_84fa..."
+export FIRST_SECRET="whsec_7bf..."
+curl -s -H "Authorization: Bearer ${API_KEY}" \
+  "http://localhost:8080/v1/endpoints/${ENDPOINT_ID}"
+```
+
+Expected response: `200 OK`, with the endpoint's `id`, `url`, and `active` state, but **without** a `secret` field. `GET /v1/endpoints` provides the same redaction guarantee while including both active and disabled endpoints.
+
+Disable the endpoint, then confirm the update:
+
+```sh
+curl -i -X PATCH "http://localhost:8080/v1/endpoints/${ENDPOINT_ID}" \
+  -H "Authorization: Bearer ${API_KEY}" \
+  -H 'Content-Type: application/json' \
+  --data '{"active":false}'
+```
+
+Expected response (`200 OK`):
+
+```json
+{"id":"we_84fa...","active":false}
+```
+
+The collection endpoint keeps disabled records visible while continuing to redact secrets:
+
+```sh
+curl -s -H "Authorization: Bearer ${API_KEY}" http://localhost:8080/v1/endpoints
+```
+
+Expected result: `data` contains `ENDPOINT_ID` with `"active":false` and no `secret` field.
+
+Create an event while the endpoint is disabled, set `DISABLED_EVENT_ID` from the response, and inspect its deliveries:
+
+```sh
+curl -s -X POST http://localhost:8080/v1/events \
+  -H "Authorization: Bearer ${API_KEY}" \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: disabled-endpoint-check-1008' \
+  --data '{"type":"payment.succeeded","merchant_reference":"disabled-endpoint-check-1008","amount_cents":2599,"currency":"USD","status":"succeeded"}'
+
+export DISABLED_EVENT_ID="evt_..."
+curl -s -H "Authorization: Bearer ${API_KEY}" \
+  "http://localhost:8080/v1/events/${DISABLED_EVENT_ID}/deliveries"
+```
+
+Expected result: `{"data":[]}`. Re-enable the endpoint before continuing the normal delivery flow:
+
+```sh
+curl -i -X PATCH "http://localhost:8080/v1/endpoints/${ENDPOINT_ID}" \
+  -H "Authorization: Bearer ${API_KEY}" \
+  -H 'Content-Type: application/json' \
+  --data '{"active":true}'
+```
+
+Rotate the signing secret. The response contains a new `whsec_...` value that must differ from `FIRST_SECRET`; save it as the receiver's new secret. A subsequent `GET /v1/endpoints/${ENDPOINT_ID}` must again omit the `secret` field.
+
+```sh
+curl -i -X POST "http://localhost:8080/v1/endpoints/${ENDPOINT_ID}/rotate-secret" \
+  -H "Authorization: Bearer ${API_KEY}"
+```
+
+Finally, prove tenant isolation. A valid API key for another tenant must not reveal or modify this endpoint:
+
+```sh
+curl -i -H "Authorization: Bearer ${OTHER_API_KEY}" \
+  "http://localhost:8080/v1/endpoints/${ENDPOINT_ID}"
+```
+
+Expected response: `404 Not Found` with `{"error":"not found"}`.
+
+## 4. Create a fictional payment event
 
 The `Idempotency-Key` makes client retries safe. The example contains only fictional order data and an amount in minor units.
 
@@ -97,7 +175,7 @@ Expected response (`201 Created`):
 
 Repeat the **identical** request with the same idempotency key. The service returns `200 OK`, the original event ID, and `"idempotent_replay": true`. Change any payload field while reusing that key and it returns `409 Conflict`.
 
-## 4. Inspect the outbound webhook and delivery history
+## 5. Inspect the outbound webhook and delivery history
 
 The receiver receives a signed POST similar to this:
 
@@ -112,7 +190,7 @@ X-PayRelay-Signature: sha256=4d1...
 {"id":"evt_2db...","type":"payment.succeeded","data":{"id":"evt_2db...","type":"payment.succeeded","merchant_reference":"demo-order-1007","amount_cents":2599,"currency":"USD","status":"succeeded","occurred_at":"2026-10-18T...Z"},"sent_at":"2026-10-18T...Z"}
 ```
 
-Use the event ID returned in step 3:
+Use the event ID returned in step 4:
 
 ```sh
 curl -s -H "Authorization: Bearer ${API_KEY}" http://localhost:8080/v1/events/evt_2db.../deliveries
@@ -139,7 +217,7 @@ curl -s -H "Authorization: Bearer ${API_KEY}" http://localhost:8080/v1/deliverie
 
 The result contains an attempt with the receiver's HTTP status code and duration in milliseconds.
 
-## 5. Verify a signature at the receiver
+## 6. Verify a signature at the receiver
 
 The signature scheme is `HMAC_SHA256("timestamp.raw_body", endpoint_secret)`, prefixed with `sha256=`. Verify the raw body before JSON parsing and reject stale timestamps. In pseudocode:
 
@@ -150,7 +228,7 @@ accept only if constantTimeEqual(expected, X-PayRelay-Signature)
 
 `internal/adapters/webhook/signature_test.go` provides an executable Go example of both successful verification and tamper rejection.
 
-## 6. Demonstrate a failed delivery and replay
+## 7. Demonstrate a failed delivery and replay
 
 Register a second test receiver that deliberately returns `500`, then create another mock event. With `PAYRELAY_MAX_ATTEMPTS=1`, inspect the delivery until it reports:
 
