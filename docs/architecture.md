@@ -46,3 +46,7 @@ Dependency direction always points inward. The core does not import `database/sq
 - CI enforces at least 85% statement coverage across `internal/...` and runs the race detector.
 
 This gives fast feedback for business rules while retaining integration coverage at infrastructure boundaries.
+
+## Request sequences
+
+See [endpoint sequence diagrams](endpoint-sequences.md) for the request and persistence flow of every public HTTP operation, plus the background webhook delivery lifecycle.

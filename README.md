@@ -58,7 +58,7 @@ worker scheduler ────────→        │              └──�
 
 PayRelay uses a ports-and-adapters (hexagonal) design. `internal/core` contains the domain, application use cases, and outbound port interfaces. `internal/adapters` contains the HTTP API, SQLite persistence, webhook transport, and worker scheduler. `cmd/server` is only the composition root that wires those pieces together.
 
-The API writes an event and its initial endpoint delivery jobs in one transaction. A background worker atomically claims due jobs, posts a signed JSON envelope, and persists every outcome. SQLite WAL mode keeps the MVP portable and locally runnable. See [the architecture guide](docs/architecture.md) for dependency rules and testing strategy.
+The API writes an event and its initial endpoint delivery jobs in one transaction. A background worker atomically claims due jobs, posts a signed JSON envelope, and persists every outcome. SQLite WAL mode keeps the MVP portable and locally runnable. See [the architecture guide](docs/architecture.md) for dependency rules and testing strategy, and [endpoint sequence diagrams](docs/endpoint-sequences.md) for each HTTP operation.
 
 ## Quick start
 
