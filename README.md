@@ -31,20 +31,21 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for branch names, review expectations, an
 - API keys are configured through `PAYRELAY_API_KEYS`, retained only as SHA-256 digests in process memory, and compared in constant time.
 - Existing SQLite installations are migrated safely; pre-Phase-2 data is assigned to the `legacy` tenant and is not exposed to configured tenants.
 
-## Phase 3: endpoint lifecycle (in progress)
+## Phase 3: endpoint lifecycle and outbound safety
 
 - Enable or disable a tenant's webhook endpoint without deleting its delivery history.
 - Rotate a signing secret on demand; the replacement secret is returned exactly once.
-- The next Phase 3 increment adds strict outbound target validation and SSRF controls.
+- Reject endpoint URLs that resolve to loopback, private, link-local, multicast, documentation, or other non-public IP ranges.
+- Revalidate DNS answers immediately before delivery and do not follow redirects, reducing SSRF and DNS-rebinding risk.
 
 ## Safety boundary and threat model
 
 PayRelay is a local/demo platform for synthetic events only.
 
 - Inputs represent fictional payment state (`amount_cents`, status, and a merchant reference), never PANs, CVVs, bank credentials, or real transaction tokens.
-- It makes outbound HTTP calls only to the endpoint URL registered by the caller. Treat this as a development service: deploy behind egress controls and an allowlist to mitigate SSRF before any shared environment use.
+- Endpoint targets must be absolute `http` or `https` URLs without credentials and resolve only to publicly routable addresses. The worker revalidates DNS answers before connecting and rejects redirects. Local receivers, private networks, cloud metadata addresses, and DNS answers that mix public and private addresses are rejected.
 - Endpoint secrets are stored in SQLite in this MVP so the worker can sign deliveries. Creation is the only API response that reveals a secret; use a managed secret store and encryption at rest in a production evolution.
-- HTTPS is supported but not required locally. Production should require HTTPS, redact logs, and rotate secrets.
+- HTTPS is supported but not required for a public target. Production should require HTTPS, add egress allowlists, redact logs, and rotate secrets.
 - Receivers must validate the timestamp and HMAC in constant time, and reject stale requests to limit replay exposure.
 
 ## Architecture
@@ -106,13 +107,13 @@ After starting the server, open [http://localhost:8080/docs/](http://localhost:8
 
 Import [`postman/PayRelay.postman_collection.json`](postman/PayRelay.postman_collection.json) into Postman to run the same local workflow with response assertions. The collection starts with the health check and persists created IDs as collection variables for the following requests.
 
-Register an endpoint (use a request-bin service or a local listener in development):
+Register an endpoint with a public request-bin service or public test receiver. Local and private-network receivers are intentionally rejected:
 
 ```sh
 curl -X POST http://localhost:8080/v1/endpoints \
   -H 'Authorization: Bearer prk_use_your_configured_key' \
   -H 'Content-Type: application/json' \
-  -d '{"url":"http://host.docker.internal:9000/webhooks/payrelay"}'
+  -d '{"url":"https://your-public-test-receiver.example/webhooks/payrelay"}'
 ```
 
 The response includes the `whsec_...` secret once. Create a **mock** event:
@@ -163,7 +164,7 @@ X-PayRelay-Signature: sha256=<hex HMAC of "timestamp.payload">
 
 ## Roadmap
 
-1. Add endpoint updates, secret rotation, SSRF-safe endpoint policies, and rate limits.
+1. Add per-tenant rate limits and endpoint circuit breaking.
 2. Move secrets to a KMS-backed store; require TLS and add structured audit logs/metrics/tracing.
-3. Introduce Postgres plus a dedicated queue for horizontal workers, DLQs, rate limiting, and endpoint circuit breaking.
-4. Add an event catalog, receiver verification SDKs, an OpenAPI spec, and load/fault-injection tests.
+3. Introduce Postgres plus a dedicated queue for horizontal workers and DLQs.
+4. Add an event catalog, receiver verification SDKs, and load/fault-injection tests.

@@ -36,7 +36,7 @@ func main() {
 	}
 	defer repo.Close()
 
-	service := application.NewService(repo, webhook.NewHTTPSender(&http.Client{Timeout: timeout}), maxAttempts)
+	service := application.NewService(repo, webhook.NewHTTPSender(webhook.NewSafeHTTPClient(timeout)), maxAttempts)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	go worker.Run(ctx, service, poll, logger)

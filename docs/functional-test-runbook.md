@@ -35,7 +35,7 @@ Content-Type: application/json
 
 ## 2. Register a test receiver
 
-Set `RECEIVER_URL` to an HTTP request inspector or a small local receiver that returns `2xx`. Never paste an endpoint secret into a public request inspector's notes.
+Set `RECEIVER_URL` to a **publicly routable** HTTP request inspector or test receiver that returns `2xx`. Localhost, private-network addresses, cloud metadata addresses, and hostnames that resolve to any of them are rejected. Never paste an endpoint secret into a public request inspector's notes.
 
 ```sh
 export RECEIVER_URL="https://your-test-receiver.example/webhooks/payrelay"
@@ -60,6 +60,28 @@ Expected response (`201 Created`; values vary):
 ```
 
 Save the returned secret securely. PayRelay returns it only at endpoint creation; endpoint listings intentionally omit it.
+
+### Verify the SSRF guard
+
+The registration boundary rejects unsafe targets before it stores an endpoint or performs an outbound request:
+
+```sh
+curl -i -X POST http://localhost:8080/v1/endpoints \
+  -H "Authorization: Bearer ${API_KEY}" \
+  -H 'Content-Type: application/json' \
+  --data '{"url":"http://127.0.0.1:8080/internal"}'
+```
+
+Expected response:
+
+```http
+HTTP/1.1 400 Bad Request
+Content-Type: application/json
+
+{"error":"url must be an absolute http(s) URL with a publicly routable target"}
+```
+
+The same policy rejects `localhost`, RFC1918/private addresses, link-local addresses such as `169.254.169.254`, IPv6 loopback, URL credentials, and hostnames with any non-public DNS result. Deliveries resolve and validate the hostname again immediately before connecting and do not follow HTTP redirects.
 
 ## 3. Verify endpoint lifecycle and secret rotation
 
