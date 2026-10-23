@@ -17,10 +17,26 @@ type Service struct {
 	repository  ports.Repository
 	sender      ports.WebhookSender
 	maxAttempts int
+	circuit     CircuitPolicy
+}
+
+type CircuitPolicy struct {
+	FailureThreshold int
+	Cooldown         time.Duration
 }
 
 func NewService(repository ports.Repository, sender ports.WebhookSender, maxAttempts int) *Service {
-	return &Service{repository: repository, sender: sender, maxAttempts: maxAttempts}
+	return NewServiceWithCircuitPolicy(repository, sender, maxAttempts, CircuitPolicy{FailureThreshold: 5, Cooldown: time.Minute})
+}
+
+func NewServiceWithCircuitPolicy(repository ports.Repository, sender ports.WebhookSender, maxAttempts int, circuit CircuitPolicy) *Service {
+	if circuit.FailureThreshold < 1 {
+		circuit.FailureThreshold = 5
+	}
+	if circuit.Cooldown <= 0 {
+		circuit.Cooldown = time.Minute
+	}
+	return &Service{repository: repository, sender: sender, maxAttempts: maxAttempts, circuit: circuit}
 }
 
 func (s *Service) CreateEndpoint(ctx context.Context, tenantID, rawURL string) (domain.Endpoint, error) {
@@ -103,7 +119,7 @@ func (s *Service) DispatchOne(ctx context.Context) (bool, error) {
 	if result.StatusCode < 200 || result.StatusCode >= 300 {
 		return true, s.recordFailure(ctx, delivery, result.StatusCode, fmt.Sprintf("receiver returned HTTP %d", result.StatusCode), result.Duration)
 	}
-	return true, s.repository.RecordAttempt(ctx, delivery.ID, result.StatusCode, "", result.Duration, nil)
+	return true, s.repository.RecordAttempt(ctx, delivery.ID, result.StatusCode, "", result.Duration, nil, ports.EndpointCircuitUpdate{EndpointID: endpoint.ID})
 }
 
 func (s *Service) recordFailure(ctx context.Context, delivery domain.Delivery, statusCode int, message string, duration time.Duration) error {
@@ -112,7 +128,7 @@ func (s *Service) recordFailure(ctx context.Context, delivery domain.Delivery, s
 		next := time.Now().UTC().Add(RetryAfter(delivery.AttemptCount + 1))
 		retryAt = &next
 	}
-	return s.repository.RecordAttempt(ctx, delivery.ID, statusCode, message, duration, retryAt)
+	return s.repository.RecordAttempt(ctx, delivery.ID, statusCode, message, duration, retryAt, ports.EndpointCircuitUpdate{EndpointID: delivery.EndpointID, Failed: true, FailureThreshold: s.circuit.FailureThreshold, CooldownUntil: time.Now().UTC().Add(s.circuit.Cooldown)})
 }
 
 func newSecret() (string, error) {

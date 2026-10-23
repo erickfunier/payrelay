@@ -61,25 +61,33 @@ func TestService_GivenRepositoryPorts_WhenManagingResources_ThenDelegatesUseCase
 	}
 }
 
+func TestService_GivenInvalidCircuitPolicy_WhenConstructed_ThenUsesSafeDefaults(t *testing.T) {
+	service := NewServiceWithCircuitPolicy(&fakeRepository{}, fakeSender{}, 3, CircuitPolicy{})
+	if service.circuit.FailureThreshold != 5 || service.circuit.Cooldown != time.Minute {
+		t.Fatalf("circuit policy = %#v", service.circuit)
+	}
+}
+
 func TestService_GivenDeliveryResult_WhenDispatching_ThenRecordsExpectedOutcome(t *testing.T) {
 	cases := []struct {
-		name       string
-		found      bool
-		result     ports.DeliveryResult
-		senderErr  error
-		maxAttempt int
-		wantError  string
-		wantStatus int
-		wantRetry  bool
+		name        string
+		found       bool
+		result      ports.DeliveryResult
+		senderErr   error
+		maxAttempt  int
+		wantError   string
+		wantStatus  int
+		wantRetry   bool
+		wantFailure bool
 	}{
 		{name: "given_no_due_delivery_when_dispatching_then_reports_not_found", found: false},
 		{name: "given_successful_response_when_dispatching_then_records_success", found: true, result: ports.DeliveryResult{StatusCode: 204}, maxAttempt: 3, wantStatus: 204},
-		{name: "given_retryable_response_when_dispatching_then_schedules_retry", found: true, result: ports.DeliveryResult{StatusCode: 503}, maxAttempt: 3, wantStatus: 503, wantRetry: true},
-		{name: "given_transport_error_when_dispatching_then_records_failure", found: true, senderErr: errors.New("offline"), maxAttempt: 1, wantError: "offline"},
+		{name: "given_retryable_response_when_dispatching_then_schedules_retry", found: true, result: ports.DeliveryResult{StatusCode: 503}, maxAttempt: 3, wantStatus: 503, wantRetry: true, wantFailure: true},
+		{name: "given_transport_error_when_dispatching_then_records_failure", found: true, senderErr: errors.New("offline"), maxAttempt: 1, wantError: "offline", wantFailure: true},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			repository := &fakeRepository{found: tt.found, claimedDelivery: domain.Delivery{ID: "dlv_1"}, claimedEndpoint: domain.Endpoint{ID: "we_1"}, claimedEvent: domain.PaymentEvent{ID: "evt_1"}}
+			repository := &fakeRepository{found: tt.found, claimedDelivery: domain.Delivery{ID: "dlv_1", EndpointID: "we_1"}, claimedEndpoint: domain.Endpoint{ID: "we_1"}, claimedEvent: domain.PaymentEvent{ID: "evt_1"}}
 			service := NewService(repository, fakeSender{result: tt.result, err: tt.senderErr}, tt.maxAttempt)
 			found, err := service.DispatchOne(context.Background())
 			if err != nil || found != tt.found {
@@ -96,6 +104,9 @@ func TestService_GivenDeliveryResult_WhenDispatching_ThenRecordsExpectedOutcome(
 			}
 			if (repository.retryAt != nil) != tt.wantRetry {
 				t.Fatalf("retry scheduled=%v, want %v", repository.retryAt != nil, tt.wantRetry)
+			}
+			if repository.circuit.EndpointID != "we_1" || repository.circuit.Failed != tt.wantFailure {
+				t.Fatalf("circuit update=%#v, want failure=%v", repository.circuit, tt.wantFailure)
 			}
 		})
 	}
@@ -117,6 +128,7 @@ type fakeRepository struct {
 	recordedStatus  int
 	recordedError   string
 	retryAt         *time.Time
+	circuit         ports.EndpointCircuitUpdate
 }
 
 func (f *fakeRepository) CreateEndpoint(_ context.Context, endpoint domain.Endpoint) error {
@@ -156,10 +168,11 @@ func (f *fakeRepository) GetEvent(context.Context, string, string) (domain.Payme
 func (f *fakeRepository) ClaimDueDelivery(context.Context, time.Time) (domain.Delivery, domain.Endpoint, domain.PaymentEvent, bool, error) {
 	return f.claimedDelivery, f.claimedEndpoint, f.claimedEvent, f.found, nil
 }
-func (f *fakeRepository) RecordAttempt(_ context.Context, _ string, status int, message string, _ time.Duration, retryAt *time.Time) error {
+func (f *fakeRepository) RecordAttempt(_ context.Context, _ string, status int, message string, _ time.Duration, retryAt *time.Time, circuit ports.EndpointCircuitUpdate) error {
 	f.recordedStatus = status
 	f.recordedError = message
 	f.retryAt = retryAt
+	f.circuit = circuit
 	return nil
 }
 func (f *fakeRepository) ListDeliveries(context.Context, string, string) ([]domain.Delivery, error) {

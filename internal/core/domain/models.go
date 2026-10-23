@@ -3,13 +3,15 @@ package domain
 import "time"
 
 type Endpoint struct {
-	TenantID  string    `json:"-"`
-	ID        string    `json:"id"`
-	URL       string    `json:"url"`
-	Secret    string    `json:"secret,omitempty"`
-	Active    bool      `json:"active"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	TenantID            string    `json:"-"`
+	ID                  string    `json:"id"`
+	URL                 string    `json:"url"`
+	Secret              string    `json:"secret,omitempty"`
+	Active              bool      `json:"active"`
+	ConsecutiveFailures int       `json:"consecutive_failures"`
+	CircuitOpenUntil    time.Time `json:"circuit_open_until,omitempty"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
 }
 
 type PaymentEvent struct {

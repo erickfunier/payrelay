@@ -23,6 +23,8 @@ func main() {
 	dbPath := env("PAYRELAY_DB_PATH", "./payrelay.db")
 	poll := durationEnv("PAYRELAY_WORKER_POLL", 500*time.Millisecond)
 	maxAttempts := intEnv("PAYRELAY_MAX_ATTEMPTS", 5)
+	circuitThreshold := intEnv("PAYRELAY_CIRCUIT_FAILURE_THRESHOLD", 5)
+	circuitCooldown := durationEnv("PAYRELAY_CIRCUIT_COOLDOWN", time.Minute)
 	timeout := durationEnv("PAYRELAY_REQUEST_TIMEOUT", 10*time.Second)
 	rateLimit := intEnv("PAYRELAY_TENANT_RATE_LIMIT", 60)
 	authenticator, err := httpapi.NewAPIKeyAuthenticator(os.Getenv("PAYRELAY_API_KEYS"))
@@ -38,7 +40,7 @@ func main() {
 	}
 	defer repo.Close()
 
-	service := application.NewService(repo, webhook.NewHTTPSender(webhook.NewSafeHTTPClient(timeout)), maxAttempts)
+	service := application.NewServiceWithCircuitPolicy(repo, webhook.NewHTTPSender(webhook.NewSafeHTTPClient(timeout)), maxAttempts, application.CircuitPolicy{FailureThreshold: circuitThreshold, Cooldown: circuitCooldown})
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	go scheduler.Run(ctx, service, poll, logger)

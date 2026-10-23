@@ -33,7 +33,7 @@ func (s *Store) Close() error { return s.db.Close() }
 func (s *Store) migrate(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `
 CREATE TABLE IF NOT EXISTS endpoints (
- id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'legacy', url TEXT NOT NULL, secret TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL DEFAULT 0
+ id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'legacy', url TEXT NOT NULL, secret TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, consecutive_failures INTEGER NOT NULL DEFAULT 0, circuit_open_until INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS events (
  id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'legacy', type TEXT NOT NULL, merchant_reference TEXT NOT NULL, amount_cents INTEGER NOT NULL,
@@ -60,10 +60,16 @@ CREATE INDEX IF NOT EXISTS attempts_delivery_idx ON delivery_attempts(delivery_i
 	if err := addColumnIfMissing(ctx, s.db, "endpoints", "updated_at", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
+	if err := addColumnIfMissing(ctx, s.db, "endpoints", "consecutive_failures", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(ctx, s.db, "endpoints", "circuit_open_until", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
 	if err := addColumnIfMissing(ctx, s.db, "events", "tenant_id", "TEXT NOT NULL DEFAULT 'legacy'"); err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `UPDATE endpoints SET updated_at=created_at WHERE updated_at=0; CREATE INDEX IF NOT EXISTS endpoints_tenant_active_idx ON endpoints(tenant_id, active); CREATE INDEX IF NOT EXISTS events_tenant_idx ON events(tenant_id);`)
+	_, err = s.db.ExecContext(ctx, `UPDATE endpoints SET updated_at=created_at WHERE updated_at=0; CREATE INDEX IF NOT EXISTS endpoints_tenant_active_idx ON endpoints(tenant_id, active); CREATE INDEX IF NOT EXISTS endpoints_circuit_idx ON endpoints(circuit_open_until); CREATE INDEX IF NOT EXISTS events_tenant_idx ON events(tenant_id);`)
 	return err
 }
 
@@ -106,7 +112,7 @@ func (s *Store) ListActiveEndpoints(ctx context.Context, tenantID string) ([]dom
 }
 
 func (s *Store) listEndpoints(ctx context.Context, tenantID string, activeOnly bool) ([]domain.Endpoint, error) {
-	query := `SELECT tenant_id,id,url,secret,active,created_at,updated_at FROM endpoints WHERE tenant_id=?`
+	query := `SELECT tenant_id,id,url,secret,active,consecutive_failures,circuit_open_until,created_at,updated_at FROM endpoints WHERE tenant_id=?`
 	if activeOnly {
 		query += ` AND active=1`
 	}
@@ -119,12 +125,15 @@ func (s *Store) listEndpoints(ctx context.Context, tenantID string, activeOnly b
 	var endpoints []domain.Endpoint
 	for rows.Next() {
 		var e domain.Endpoint
-		var created, updated int64
+		var created, updated, circuitOpenUntil int64
 		var active int
-		if err := rows.Scan(&e.TenantID, &e.ID, &e.URL, &e.Secret, &active, &created, &updated); err != nil {
+		if err := rows.Scan(&e.TenantID, &e.ID, &e.URL, &e.Secret, &active, &e.ConsecutiveFailures, &circuitOpenUntil, &created, &updated); err != nil {
 			return nil, err
 		}
 		e.Active = active == 1
+		if circuitOpenUntil > 0 {
+			e.CircuitOpenUntil = time.Unix(circuitOpenUntil, 0).UTC()
+		}
 		e.CreatedAt = time.Unix(created, 0).UTC()
 		e.UpdatedAt = time.Unix(updated, 0).UTC()
 		endpoints = append(endpoints, e)
@@ -136,7 +145,8 @@ func (s *Store) GetEndpoint(ctx context.Context, tenantID, id string) (domain.En
 	var created int64
 	var active int
 	var updated int64
-	err := s.db.QueryRowContext(ctx, `SELECT tenant_id,id,url,secret,active,created_at,updated_at FROM endpoints WHERE tenant_id=? AND id=?`, tenantID, id).Scan(&e.TenantID, &e.ID, &e.URL, &e.Secret, &active, &created, &updated)
+	var circuitOpenUntil int64
+	err := s.db.QueryRowContext(ctx, `SELECT tenant_id,id,url,secret,active,consecutive_failures,circuit_open_until,created_at,updated_at FROM endpoints WHERE tenant_id=? AND id=?`, tenantID, id).Scan(&e.TenantID, &e.ID, &e.URL, &e.Secret, &active, &e.ConsecutiveFailures, &circuitOpenUntil, &created, &updated)
 	if errors.Is(err, sql.ErrNoRows) {
 		return e, ports.ErrNotFound
 	}
@@ -144,6 +154,9 @@ func (s *Store) GetEndpoint(ctx context.Context, tenantID, id string) (domain.En
 		return e, err
 	}
 	e.Active = active == 1
+	if circuitOpenUntil > 0 {
+		e.CircuitOpenUntil = time.Unix(circuitOpenUntil, 0).UTC()
+	}
 	e.CreatedAt = time.Unix(created, 0).UTC()
 	e.UpdatedAt = time.Unix(updated, 0).UTC()
 	return e, nil
@@ -243,7 +256,7 @@ func (s *Store) ClaimDueDelivery(ctx context.Context, now time.Time) (domain.Del
 	}
 	defer tx.Rollback()
 	var id string
-	err = tx.QueryRowContext(ctx, `SELECT id FROM deliveries WHERE status='pending' AND next_attempt_at<=? ORDER BY next_attempt_at LIMIT 1`, now.Unix()).Scan(&id)
+	err = tx.QueryRowContext(ctx, `SELECT d.id FROM deliveries d JOIN endpoints e ON e.id=d.endpoint_id WHERE d.status='pending' AND d.next_attempt_at<=? AND (e.circuit_open_until=0 OR e.circuit_open_until<=?) ORDER BY d.next_attempt_at LIMIT 1`, now.Unix(), now.Unix()).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Delivery{}, domain.Endpoint{}, domain.PaymentEvent{}, false, nil
 	}
@@ -288,7 +301,7 @@ func loadDispatch(ctx context.Context, q interface {
 	return d, e, event, nil
 }
 
-func (s *Store) RecordAttempt(ctx context.Context, deliveryID string, statusCode int, requestErr string, duration time.Duration, retryAt *time.Time) error {
+func (s *Store) RecordAttempt(ctx context.Context, deliveryID string, statusCode int, requestErr string, duration time.Duration, retryAt *time.Time, circuit ports.EndpointCircuitUpdate) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -318,6 +331,14 @@ func (s *Store) RecordAttempt(ctx context.Context, deliveryID string, statusCode
 		}
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE deliveries SET status=?,attempt_count=?,next_attempt_at=?,last_error=?,updated_at=? WHERE id=?`, state, count, next, requestErr, time.Now().UTC().Unix(), deliveryID)
+	if err != nil {
+		return err
+	}
+	if circuit.Failed {
+		_, err = tx.ExecContext(ctx, `UPDATE endpoints SET consecutive_failures=consecutive_failures+1,circuit_open_until=CASE WHEN consecutive_failures+1>=? THEN ? ELSE circuit_open_until END,updated_at=? WHERE id=?`, circuit.FailureThreshold, circuit.CooldownUntil.Unix(), time.Now().UTC().Unix(), circuit.EndpointID)
+	} else {
+		_, err = tx.ExecContext(ctx, `UPDATE endpoints SET consecutive_failures=0,circuit_open_until=0,updated_at=? WHERE id=?`, time.Now().UTC().Unix(), circuit.EndpointID)
+	}
 	if err != nil {
 		return err
 	}
