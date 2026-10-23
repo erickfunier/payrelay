@@ -1,4 +1,4 @@
-package delivery
+package application
 
 import (
 	"math/rand/v2"

@@ -10,9 +10,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/example/payrelay/internal/api"
-	"github.com/example/payrelay/internal/delivery"
-	"github.com/example/payrelay/internal/store"
+	"github.com/example/payrelay/internal/adapters/httpapi"
+	"github.com/example/payrelay/internal/adapters/scheduler"
+	"github.com/example/payrelay/internal/adapters/sqlite"
+	"github.com/example/payrelay/internal/adapters/webhook"
+	"github.com/example/payrelay/internal/core/application"
 )
 
 func main() {
@@ -21,20 +23,25 @@ func main() {
 	poll := durationEnv("PAYRELAY_WORKER_POLL", 500*time.Millisecond)
 	maxAttempts := intEnv("PAYRELAY_MAX_ATTEMPTS", 5)
 	timeout := durationEnv("PAYRELAY_REQUEST_TIMEOUT", 10*time.Second)
+	authenticator, err := httpapi.NewAPIKeyAuthenticator(os.Getenv("PAYRELAY_API_KEYS"))
+	if err != nil {
+		logger.Error("configure API authentication", "error", err)
+		os.Exit(1)
+	}
 
-	repo, err := store.Open(dbPath)
+	repo, err := sqlite.Open(dbPath)
 	if err != nil {
 		logger.Error("open database", "error", err)
 		os.Exit(1)
 	}
 	defer repo.Close()
 
-	dispatcher := delivery.NewDispatcher(repo, &http.Client{Timeout: timeout}, maxAttempts, logger)
+	service := application.NewService(repo, webhook.NewHTTPSender(webhook.NewSafeHTTPClient(timeout)), maxAttempts)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	go delivery.RunWorker(ctx, dispatcher, poll, logger)
+	go scheduler.Run(ctx, service, poll, logger)
 
-	server := &http.Server{Addr: env("PAYRELAY_ADDR", ":8080"), Handler: api.NewServer(repo, dispatcher, logger), ReadHeaderTimeout: 5 * time.Second}
+	server := &http.Server{Addr: env("PAYRELAY_ADDR", ":8080"), Handler: httpapi.NewServer(service, logger, authenticator), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shutdown, stop := context.WithTimeout(context.Background(), 10*time.Second)

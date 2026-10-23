@@ -6,3 +6,4 @@ bin/
 /server
 server.exe
 coverage.out
+/coverage

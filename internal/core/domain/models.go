@@ -3,14 +3,17 @@ package domain
 import "time"
 
 type Endpoint struct {
+	TenantID  string    `json:"-"`
 	ID        string    `json:"id"`
 	URL       string    `json:"url"`
 	Secret    string    `json:"secret,omitempty"`
 	Active    bool      `json:"active"`
 	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type PaymentEvent struct {
+	TenantID       string    `json:"-"`
 	ID             string    `json:"id"`
 	Type           string    `json:"type"`
 	MerchantRef    string    `json:"merchant_reference"`
