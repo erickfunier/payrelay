@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/example/payrelay/internal/core/domain"
-	"github.com/example/payrelay/internal/targetpolicy"
+	"github.com/example/payrelay/internal/security/webhooktarget"
 )
 
 func TestHTTPSender_GivenReceiver_WhenSending_ThenPostsSignedEnvelope(t *testing.T) {
@@ -60,8 +60,8 @@ func TestNewSafeHTTPClient_GivenLoopbackTarget_WhenRequesting_ThenItRejectsTheCo
 	if _, err := client.Get("http://127.0.0.1:8080/internal"); err == nil {
 		t.Fatal("Get() error = nil, want loopback target rejection")
 	}
-	if err := client.CheckRedirect(&http.Request{}, nil); !errors.Is(err, targetpolicy.ErrUnsafeTarget) {
-		t.Fatalf("CheckRedirect() error = %v, want %v", err, targetpolicy.ErrUnsafeTarget)
+	if err := client.CheckRedirect(&http.Request{}, nil); !errors.Is(err, webhooktarget.ErrUnsafeTarget) {
+		t.Fatalf("CheckRedirect() error = %v, want %v", err, webhooktarget.ErrUnsafeTarget)
 	}
 }
 

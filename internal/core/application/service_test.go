@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/example/payrelay/internal/adapters/scheduler"
 	"github.com/example/payrelay/internal/adapters/sqlite"
 	"github.com/example/payrelay/internal/adapters/webhook"
-	"github.com/example/payrelay/internal/adapters/worker"
 	"github.com/example/payrelay/internal/core/application"
 	"github.com/example/payrelay/internal/core/domain"
 )
@@ -143,7 +143,7 @@ func TestService_GivenNoDueWork_WhenDispatchingOrStoppingWorker_ThenReturnsClean
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	worker.Run(ctx, dispatcher, time.Millisecond, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	scheduler.Run(ctx, dispatcher, time.Millisecond, slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)

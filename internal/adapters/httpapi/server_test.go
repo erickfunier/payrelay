@@ -17,7 +17,7 @@ import (
 	"github.com/example/payrelay/internal/adapters/webhook"
 	"github.com/example/payrelay/internal/core/application"
 	"github.com/example/payrelay/internal/core/domain"
-	"github.com/example/payrelay/internal/targetpolicy"
+	"github.com/example/payrelay/internal/security/webhooktarget"
 )
 
 func TestAPI_GivenRegisteredEndpoint_WhenEventIsCreatedAndDispatched_ThenPersistsDeliveryHistory(t *testing.T) {
@@ -384,7 +384,7 @@ type allowEndpointTargetValidator struct{}
 func (allowEndpointTargetValidator) Validate(_ context.Context, rawURL string) error {
 	target, err := url.ParseRequestURI(rawURL)
 	if err != nil || target.Scheme != "http" && target.Scheme != "https" || target.Host == "" {
-		return targetpolicy.ErrUnsafeTarget
+		return webhooktarget.ErrUnsafeTarget
 	}
 	return nil
 }

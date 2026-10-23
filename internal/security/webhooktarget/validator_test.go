@@ -1,4 +1,4 @@
-package targetpolicy
+package webhooktarget
 
 import (
 	"context"

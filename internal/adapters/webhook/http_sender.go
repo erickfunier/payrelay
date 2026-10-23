@@ -11,7 +11,7 @@ import (
 
 	"github.com/example/payrelay/internal/core/domain"
 	"github.com/example/payrelay/internal/core/ports"
-	"github.com/example/payrelay/internal/targetpolicy"
+	"github.com/example/payrelay/internal/security/webhooktarget"
 )
 
 // HTTPSender is the outbound adapter that converts a domain event into a
@@ -28,12 +28,12 @@ func NewHTTPSender(client *http.Client) *HTTPSender { return &HTTPSender{client:
 func NewSafeHTTPClient(timeout time.Duration) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
-	transport.DialContext = targetpolicy.NewValidator().DialContext
+	transport.DialContext = webhooktarget.NewValidator().DialContext
 	return &http.Client{
 		Timeout:   timeout,
 		Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return targetpolicy.ErrUnsafeTarget
+			return webhooktarget.ErrUnsafeTarget
 		},
 	}
 }

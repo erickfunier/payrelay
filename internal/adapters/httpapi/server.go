@@ -16,7 +16,7 @@ import (
 	"github.com/example/payrelay/internal/core/application"
 	"github.com/example/payrelay/internal/core/domain"
 	"github.com/example/payrelay/internal/core/ports"
-	"github.com/example/payrelay/internal/targetpolicy"
+	"github.com/example/payrelay/internal/security/webhooktarget"
 )
 
 //go:embed swagger/*
@@ -37,12 +37,12 @@ type EndpointTargetValidator interface {
 }
 
 func NewServer(service *application.Service, logger *slog.Logger, auth TenantAuthenticator) http.Handler {
-	return NewServerWithTargetValidator(service, logger, auth, targetpolicy.NewValidator())
+	return NewServerWithTargetValidator(service, logger, auth, webhooktarget.NewValidator())
 }
 
 func NewServerWithTargetValidator(service *application.Service, logger *slog.Logger, auth TenantAuthenticator, targets EndpointTargetValidator) http.Handler {
 	if targets == nil {
-		targets = targetpolicy.NewValidator()
+		targets = webhooktarget.NewValidator()
 	}
 	s := &Server{service: service, logger: logger, auth: auth, targets: targets, mux: http.NewServeMux()}
 	s.routes()
