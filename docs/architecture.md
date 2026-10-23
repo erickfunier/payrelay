@@ -27,7 +27,8 @@ PayRelay follows the ports-and-adapters (hexagonal) style so business behavior i
 | `internal/adapters/httpapi` | Request validation and HTTP response mapping | Application, domain, ports errors |
 | `internal/adapters/sqlite` | Durable repository implementation | Ports and domain; `database/sql` |
 | `internal/adapters/webhook` | JSON envelope, HMAC signing, outbound HTTP | Ports and domain; `net/http` |
-| `internal/adapters/worker` | Polling and operational logging | Application dispatcher port |
+| `internal/adapters/scheduler` | Polling and operational logging | Application dispatcher port |
+| `internal/security/webhooktarget` | Public-target validation and safe outbound dialing | Go standard library only |
 | `cmd/server` | Configuration and dependency wiring | Core and adapters |
 
 Dependency direction always points inward. The core does not import `database/sql`, `net/http`, or a concrete adapter.

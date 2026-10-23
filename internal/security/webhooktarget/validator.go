@@ -1,6 +1,6 @@
-// Package targetpolicy validates and dials webhook targets without allowing
+// Package webhooktarget validates and dials webhook targets without allowing
 // requests to local or otherwise non-public network addresses.
-package targetpolicy
+package webhooktarget
 
 import (
 	"context"

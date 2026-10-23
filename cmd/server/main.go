@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/example/payrelay/internal/adapters/httpapi"
+	"github.com/example/payrelay/internal/adapters/scheduler"
 	"github.com/example/payrelay/internal/adapters/sqlite"
 	"github.com/example/payrelay/internal/adapters/webhook"
-	"github.com/example/payrelay/internal/adapters/worker"
 	"github.com/example/payrelay/internal/core/application"
 )
 
@@ -39,7 +39,7 @@ func main() {
 	service := application.NewService(repo, webhook.NewHTTPSender(webhook.NewSafeHTTPClient(timeout)), maxAttempts)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	go worker.Run(ctx, service, poll, logger)
+	go scheduler.Run(ctx, service, poll, logger)
 
 	server := &http.Server{Addr: env("PAYRELAY_ADDR", ":8080"), Handler: httpapi.NewServer(service, logger, authenticator), ReadHeaderTimeout: 5 * time.Second}
 	go func() {
