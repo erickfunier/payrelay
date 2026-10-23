@@ -10,12 +10,14 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/example/payrelay/internal/core/application"
 	"github.com/example/payrelay/internal/core/domain"
 	"github.com/example/payrelay/internal/core/ports"
+	"github.com/example/payrelay/internal/security/ratelimit"
 	"github.com/example/payrelay/internal/security/webhooktarget"
 )
 
@@ -27,6 +29,7 @@ type Server struct {
 	logger  *slog.Logger
 	auth    TenantAuthenticator
 	targets EndpointTargetValidator
+	limits  TenantRateLimiter
 	mux     *http.ServeMux
 }
 
@@ -36,15 +39,31 @@ type EndpointTargetValidator interface {
 	Validate(context.Context, string) error
 }
 
+// TenantRateLimiter protects management routes after a request is authenticated.
+type TenantRateLimiter interface {
+	Allow(tenantID string) (ratelimit.Decision, bool)
+}
+
 func NewServer(service *application.Service, logger *slog.Logger, auth TenantAuthenticator) http.Handler {
-	return NewServerWithTargetValidator(service, logger, auth, webhooktarget.NewValidator())
+	return NewServerWithDependencies(service, logger, auth, webhooktarget.NewValidator(), ratelimit.NewTenantLimiter(60, time.Minute))
 }
 
 func NewServerWithTargetValidator(service *application.Service, logger *slog.Logger, auth TenantAuthenticator, targets EndpointTargetValidator) http.Handler {
+	return NewServerWithDependencies(service, logger, auth, targets, ratelimit.NewTenantLimiter(60, time.Minute))
+}
+
+func NewServerWithRateLimiter(service *application.Service, logger *slog.Logger, auth TenantAuthenticator, limits TenantRateLimiter) http.Handler {
+	return NewServerWithDependencies(service, logger, auth, webhooktarget.NewValidator(), limits)
+}
+
+func NewServerWithDependencies(service *application.Service, logger *slog.Logger, auth TenantAuthenticator, targets EndpointTargetValidator, limits TenantRateLimiter) http.Handler {
 	if targets == nil {
 		targets = webhooktarget.NewValidator()
 	}
-	s := &Server{service: service, logger: logger, auth: auth, targets: targets, mux: http.NewServeMux()}
+	if limits == nil {
+		limits = ratelimit.NewTenantLimiter(60, time.Minute)
+	}
+	s := &Server{service: service, logger: logger, auth: auth, targets: targets, limits: limits, mux: http.NewServeMux()}
 	s.routes()
 	return s.withLogging(s.mux)
 }
@@ -78,8 +97,22 @@ func (s *Server) handleAuthenticated(pattern string, next http.HandlerFunc) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "authentication required"})
 			return
 		}
+		decision, allowed := s.limits.Allow(tenantID)
+		writeRateLimitHeaders(w, decision)
+		if !allowed {
+			wait := max(1, int(time.Until(decision.ResetAt).Seconds())+1)
+			w.Header().Set("Retry-After", strconv.Itoa(wait))
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limit exceeded"})
+			return
+		}
 		next(w, r.WithContext(context.WithValue(r.Context(), tenantContextKey{}, tenantID)))
 	})
+}
+
+func writeRateLimitHeaders(w http.ResponseWriter, decision ratelimit.Decision) {
+	w.Header().Set("X-RateLimit-Limit", strconv.Itoa(decision.Limit))
+	w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(decision.Remaining))
+	w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(decision.ResetAt.Unix(), 10))
 }
 
 func tenantID(ctx context.Context) string {

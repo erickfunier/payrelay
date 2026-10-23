@@ -33,14 +33,44 @@ Content-Type: application/json
 {"status":"ok"}
 ```
 
+## 1.1 Verify the per-tenant rate limit
+
+For this optional check, stop the normal run and restart with a deliberately small quota of three management requests per tenant per minute. The response includes the quota headers; a fourth request with the same API key returns `429`, while another tenant remains independent.
+
+```sh
+PAYRELAY_MAX_ATTEMPTS=1 PAYRELAY_TENANT_RATE_LIMIT=3 PAYRELAY_API_KEYS=merchant_demo:prk_local_demo_key_0123456789,merchant_other:prk_other_demo_key_0123456789 go run ./cmd/server
+```
+
+```sh
+export API_KEY="prk_local_demo_key_0123456789"
+export OTHER_API_KEY="prk_other_demo_key_0123456789"
+```
+
+```sh
+for request in 1 2 3 4; do
+  curl -si http://localhost:8080/v1/endpoints -H "Authorization: Bearer ${API_KEY}" | head -n 1
+done
+curl -si http://localhost:8080/v1/endpoints -H "Authorization: Bearer ${OTHER_API_KEY}" | head -n 1
+```
+
+Expected status lines:
+
+```text
+HTTP/1.1 200 OK
+HTTP/1.1 200 OK
+HTTP/1.1 200 OK
+HTTP/1.1 429 Too Many Requests
+HTTP/1.1 200 OK
+```
+
+The `429` response includes `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset`. Stop this small-quota server and restart it with the normal command in section 1 before continuing the runbook.
+
 ## 2. Register a test receiver
 
 Set `RECEIVER_URL` to a **publicly routable** HTTP request inspector or test receiver that returns `2xx`. Localhost, private-network addresses, cloud metadata addresses, and hostnames that resolve to any of them are rejected. Never paste an endpoint secret into a public request inspector's notes.
 
 ```sh
 export RECEIVER_URL="https://your-test-receiver.example/webhooks/payrelay"
-export API_KEY="prk_local_demo_key_0123456789"
-export OTHER_API_KEY="prk_other_demo_key_0123456789"
 curl -i -X POST http://localhost:8080/v1/endpoints \
   -H "Authorization: Bearer ${API_KEY}" \
   -H 'Content-Type: application/json' \

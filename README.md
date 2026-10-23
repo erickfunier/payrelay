@@ -148,7 +148,8 @@ X-PayRelay-Signature: sha256=<hex HMAC of "timestamp.payload">
 
 - **SQLite over a broker/queue:** one executable, simple local setup, durable enough for a single-instance MVP. It is not a multi-node work queue.
 - **At-least-once delivery:** a receiver can observe a request even when the sender cannot persist the response. Deduplicate by event ID on the receiver side.
-- **Fixed retry policy:** failures retry up to `PAYRELAY_MAX_ATTEMPTS` (default five). `Retry-After`, dead-letter routing, endpoint pause/circuit breaking, and per-tenant limits are deliberately deferred.
+- **Fixed retry policy:** failures retry up to `PAYRELAY_MAX_ATTEMPTS` (default five). Delivery `Retry-After`, dead-letter routing, and endpoint pause/circuit breaking are deliberately deferred.
+- **Per-tenant management limits:** authenticated `/v1` traffic is limited independently per tenant to 60 requests per fixed one-minute window by default. The limiter is process-local, so multi-instance deployments require a shared limiter before relying on it as a global control.
 - **No endpoint authentication model:** this is intentionally a local management API. An operator API or tenant auth is a necessary next step.
 
 ## Configuration
@@ -161,10 +162,11 @@ X-PayRelay-Signature: sha256=<hex HMAC of "timestamp.payload">
 | `PAYRELAY_MAX_ATTEMPTS` | `5` | Total delivery attempts before a delivery fails |
 | `PAYRELAY_REQUEST_TIMEOUT` | `10s` | Outbound webhook HTTP timeout |
 | `PAYRELAY_API_KEYS` | required | Comma-separated `tenant-id:api-key` pairs; API keys must be at least 20 characters |
+| `PAYRELAY_TENANT_RATE_LIMIT` | `60` | Authenticated `/v1` requests permitted per tenant in each one-minute fixed window |
 
 ## Roadmap
 
-1. Add per-tenant rate limits and endpoint circuit breaking.
+1. Add endpoint circuit breaking and delivery `Retry-After` handling.
 2. Move secrets to a KMS-backed store; require TLS and add structured audit logs/metrics/tracing.
-3. Introduce Postgres plus a dedicated queue for horizontal workers and DLQs.
+3. Introduce Postgres plus a dedicated queue and shared rate limiter for horizontal workers.
 4. Add an event catalog, receiver verification SDKs, and load/fault-injection tests.

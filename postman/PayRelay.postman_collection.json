@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "6fc28b68-8040-46f6-a8d3-1db5c9bc3907",
     "name": "PayRelay Local API",
-    "description": "Requests for PayRelay's mock payment-event webhook API. Set baseUrl and receiverUrl before running. Endpoint targets must resolve only to public addresses; this collection intentionally checks that local targets are rejected. This collection must only contain synthetic payment data.",
+    "description": "Requests for PayRelay's mock payment-event webhook API. Set baseUrl and receiverUrl before running. Endpoint targets must resolve only to public addresses; this collection intentionally checks that local targets are rejected. Authenticated /v1 requests are independently rate-limited per tenant; inspect the X-RateLimit-* headers and Retry-After on 429 responses. This collection must only contain synthetic payment data.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
