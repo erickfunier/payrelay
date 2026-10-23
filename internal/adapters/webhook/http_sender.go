@@ -11,6 +11,7 @@ import (
 
 	"github.com/example/payrelay/internal/core/domain"
 	"github.com/example/payrelay/internal/core/ports"
+	"github.com/example/payrelay/internal/targetpolicy"
 )
 
 // HTTPSender is the outbound adapter that converts a domain event into a
@@ -20,6 +21,22 @@ type HTTPSender struct{ client *http.Client }
 var _ ports.WebhookSender = (*HTTPSender)(nil)
 
 func NewHTTPSender(client *http.Client) *HTTPSender { return &HTTPSender{client: client} }
+
+// NewSafeHTTPClient creates the production webhook client. It validates DNS
+// answers immediately before connection and never follows redirects, so an
+// endpoint cannot pivot an outbound request into a private network.
+func NewSafeHTTPClient(timeout time.Duration) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.DialContext = targetpolicy.NewValidator().DialContext
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return targetpolicy.ErrUnsafeTarget
+		},
+	}
+}
 
 func (s *HTTPSender) Send(ctx context.Context, endpoint domain.Endpoint, event domain.PaymentEvent) (ports.DeliveryResult, error) {
 	payload, err := json.Marshal(struct {

@@ -8,8 +8,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/example/payrelay/internal/core/domain"
+	"github.com/example/payrelay/internal/targetpolicy"
 )
 
 func TestHTTPSender_GivenReceiver_WhenSending_ThenPostsSignedEnvelope(t *testing.T) {
@@ -50,6 +52,16 @@ func TestHTTPSender_GivenTransportOrURLFailure_WhenSending_ThenReturnsError(t *t
 				t.Fatalf("result=%#v err=%v", result, err)
 			}
 		})
+	}
+}
+
+func TestNewSafeHTTPClient_GivenLoopbackTarget_WhenRequesting_ThenItRejectsTheConnection(t *testing.T) {
+	client := NewSafeHTTPClient(time.Second)
+	if _, err := client.Get("http://127.0.0.1:8080/internal"); err == nil {
+		t.Fatal("Get() error = nil, want loopback target rejection")
+	}
+	if err := client.CheckRedirect(&http.Request{}, nil); !errors.Is(err, targetpolicy.ErrUnsafeTarget) {
+		t.Fatalf("CheckRedirect() error = %v, want %v", err, targetpolicy.ErrUnsafeTarget)
 	}
 }
 

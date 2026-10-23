@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"github.com/example/payrelay/internal/adapters/webhook"
 	"github.com/example/payrelay/internal/core/application"
 	"github.com/example/payrelay/internal/core/domain"
+	"github.com/example/payrelay/internal/targetpolicy"
 )
 
 func TestAPI_GivenRegisteredEndpoint_WhenEventIsCreatedAndDispatched_ThenPersistsDeliveryHistory(t *testing.T) {
@@ -333,7 +335,32 @@ func TestAPI_GivenInvalidRequest_WhenHandled_ThenReturnsExpectedClientError(t *t
 	}
 }
 
+func TestAPI_GivenUnsafeEndpointTarget_WhenCreatingEndpoint_ThenReturnsBadRequest(t *testing.T) {
+	handler, _ := testServerWithTargetValidator(t, nil)
+	cases := []struct {
+		name string
+		body string
+	}{
+		{name: "given loopback target when creating endpoint then it returns bad request", body: `{"url":"http://127.0.0.1:8080/hooks"}`},
+		{name: "given cloud metadata target when creating endpoint then it returns bad request", body: `{"url":"http://169.254.169.254/latest/meta-data"}`},
+		{name: "given localhost target when creating endpoint then it returns bad request", body: `{"url":"http://localhost:8080/hooks"}`},
+		{name: "given credentialed target when creating endpoint then it returns bad request", body: `{"url":"https://user:pass@localhost/hooks"}`},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			response := request(t, handler, http.MethodPost, "/v1/endpoints", tt.body, nil)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusBadRequest, response.Body.String())
+			}
+		})
+	}
+}
+
 func testServer(t *testing.T) (http.Handler, *application.Service) {
+	return testServerWithTargetValidator(t, allowEndpointTargetValidator{})
+}
+
+func testServerWithTargetValidator(t *testing.T, targets EndpointTargetValidator) (http.Handler, *application.Service) {
 	t.Helper()
 	repo, err := sqlite.Open(filepath.Join(t.TempDir(), "payrelay.db"))
 	if err != nil {
@@ -346,7 +373,20 @@ func testServer(t *testing.T) (http.Handler, *application.Service) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewServer(service, logger, authenticator), service
+	if targets == nil {
+		return NewServer(service, logger, authenticator), service
+	}
+	return NewServerWithTargetValidator(service, logger, authenticator, targets), service
+}
+
+type allowEndpointTargetValidator struct{}
+
+func (allowEndpointTargetValidator) Validate(_ context.Context, rawURL string) error {
+	target, err := url.ParseRequestURI(rawURL)
+	if err != nil || target.Scheme != "http" && target.Scheme != "https" || target.Host == "" {
+		return targetpolicy.ErrUnsafeTarget
+	}
+	return nil
 }
 
 func request(t *testing.T, handler http.Handler, method, path, body string, headers map[string]string) *httptest.ResponseRecorder {

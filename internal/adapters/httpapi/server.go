@@ -10,13 +10,13 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
 	"github.com/example/payrelay/internal/core/application"
 	"github.com/example/payrelay/internal/core/domain"
 	"github.com/example/payrelay/internal/core/ports"
+	"github.com/example/payrelay/internal/targetpolicy"
 )
 
 //go:embed swagger/*
@@ -26,11 +26,25 @@ type Server struct {
 	service *application.Service
 	logger  *slog.Logger
 	auth    TenantAuthenticator
+	targets EndpointTargetValidator
 	mux     *http.ServeMux
 }
 
+// EndpointTargetValidator protects the registration boundary from unsafe
+// outbound targets. It is an interface to keep HTTP handler tests deterministic.
+type EndpointTargetValidator interface {
+	Validate(context.Context, string) error
+}
+
 func NewServer(service *application.Service, logger *slog.Logger, auth TenantAuthenticator) http.Handler {
-	s := &Server{service: service, logger: logger, auth: auth, mux: http.NewServeMux()}
+	return NewServerWithTargetValidator(service, logger, auth, targetpolicy.NewValidator())
+}
+
+func NewServerWithTargetValidator(service *application.Service, logger *slog.Logger, auth TenantAuthenticator, targets EndpointTargetValidator) http.Handler {
+	if targets == nil {
+		targets = targetpolicy.NewValidator()
+	}
+	s := &Server{service: service, logger: logger, auth: auth, targets: targets, mux: http.NewServeMux()}
 	s.routes()
 	return s.withLogging(s.mux)
 }
@@ -97,9 +111,8 @@ func (s *Server) createEndpoint(w http.ResponseWriter, r *http.Request) {
 		bad(w, err)
 		return
 	}
-	parsed, err := url.ParseRequestURI(input.URL)
-	if err != nil || parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.Host == "" {
-		bad(w, errors.New("url must be an absolute http(s) URL"))
+	if err := s.targets.Validate(r.Context(), input.URL); err != nil {
+		bad(w, err)
 		return
 	}
 	endpoint, err := s.service.CreateEndpoint(r.Context(), tenantID(r.Context()), input.URL)
