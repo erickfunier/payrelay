@@ -1,6 +1,6 @@
 # PayRelay
 
-PayRelay is a portfolio-quality **fictional payment-event webhook delivery service**. It creates mock payment events and sends signed webhook notifications to merchant endpoints. It is deliberately not a payment processor: it cannot charge a card, integrate with payment providers, or accept/store card data.
+PayRelay creates payment events and delivers signed webhook notifications to merchant endpoints.
 
 ## Development workflow
 
@@ -38,9 +38,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for branch names, review expectations, an
 - Reject endpoint URLs that resolve to loopback, private, link-local, multicast, documentation, or other non-public IP ranges.
 - Revalidate DNS answers immediately before delivery and do not follow redirects, reducing SSRF and DNS-rebinding risk.
 
-## Safety boundary and threat model
-
-PayRelay is a local/demo platform for synthetic events only.
+## Security model
 
 - Inputs represent fictional payment state (`amount_cents`, status, and a merchant reference), never PANs, CVVs, bank credentials, or real transaction tokens.
 - Endpoint targets must be absolute `http` or `https` URLs without credentials and resolve only to publicly routable addresses. The worker revalidates DNS answers before connecting and rejects redirects. Local receivers, private networks, cloud metadata addresses, and DNS answers that mix public and private addresses are rejected.
