@@ -245,6 +245,8 @@ components:
         url: { type: string, format: uri }
         secret: { type: string, description: Returned only when creating an endpoint or rotating its secret., example: whsec_0b62d9c2e8 }
         active: { type: boolean, example: true }
+        consecutive_failures: { type: integer, example: 0, description: Consecutive failed deliveries for this endpoint; reset by a successful delivery. }
+        circuit_open_until: { type: string, format: date-time, nullable: true, description: Deliveries are held until this time when the circuit is open. }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     EndpointList:

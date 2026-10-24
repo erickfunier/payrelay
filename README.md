@@ -1,6 +1,34 @@
 # PayRelay
 
-PayRelay is a portfolio-quality **fictional payment-event webhook delivery service**. It creates mock payment events and sends signed webhook notifications to merchant endpoints. It is deliberately not a payment processor: it cannot charge a card, integrate with payment providers, or accept/store card data.
+PayRelay is a webhook delivery platform for payment-event integrations. An application submits a payment event, and PayRelay distributes a signed notification to each configured merchant endpoint.
+
+## What PayRelay does
+
+Payment systems often need to notify other systems when an order is paid, fails, or changes state. PayRelay is the reliable delivery layer between the application that knows about the payment event and the systems that need to react to it, such as an order service, ERP, or merchant backend.
+
+```text
+Application                PayRelay                              Merchant system
+    │                         │                                        │
+    │  1. Register webhook    │                                        │
+    │────────────────────────>│                                        │
+    │  endpoint + API key     │                                        │
+    │                         │                                        │
+    │  2. Submit payment event│                                        │
+    │────────────────────────>│  stores event + delivery job           │
+    │                         │───────────────────────────────────────>│
+    │                         │  3. Signed webhook notification        │
+    │                         │<───────────────────────────────────────│
+    │                         │  4. HTTP result; retry when necessary  │
+```
+
+In practice, an integration follows four steps:
+
+1. A tenant authenticates with an API key and registers a **webhook endpoint**.
+2. PayRelay returns an endpoint ID and a one-time signing secret.
+3. The tenant submits a `payment.*` event with an idempotency key.
+4. A background worker sends an HMAC-signed webhook, records every attempt, retries failures, and temporarily opens a circuit for persistently unhealthy endpoints.
+
+The service provides tenant isolation, durable at-least-once delivery, request idempotency, HMAC-signed notifications, delivery history, replay for failed deliveries, per-tenant API rate limits, and endpoint circuit breaking.
 
 ## Development workflow
 
@@ -13,7 +41,7 @@ This public repository uses a two-stage Git flow:
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for branch names, review expectations, and the release process.
 
-## What Phase 1 delivers
+## Core capabilities
 
 - Create merchant webhook endpoints, each with a generated signing secret.
 - Create mock `payment.*` events and persist them in SQLite.
@@ -26,7 +54,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for branch names, review expectations, an
 
 ## Phase 2: security foundation
 
-- Bearer API-key authentication for every management endpoint under `/v1`.
+- API key authentication for every management endpoint under `/v1`, supplied through the `Authorization: Bearer` header.
 - Tenant isolation: endpoints, events, idempotency keys, delivery history, and replay operations are scoped to the authenticated tenant.
 - API keys are configured through `PAYRELAY_API_KEYS`, retained only as SHA-256 digests in process memory, and compared in constant time.
 - Existing SQLite installations are migrated safely; pre-Phase-2 data is assigned to the `legacy` tenant and is not exposed to configured tenants.
@@ -38,11 +66,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for branch names, review expectations, an
 - Reject endpoint URLs that resolve to loopback, private, link-local, multicast, documentation, or other non-public IP ranges.
 - Revalidate DNS answers immediately before delivery and do not follow redirects, reducing SSRF and DNS-rebinding risk.
 
-## Safety boundary and threat model
+## Security model
 
-PayRelay is a local/demo platform for synthetic events only.
-
-- Inputs represent fictional payment state (`amount_cents`, status, and a merchant reference), never PANs, CVVs, bank credentials, or real transaction tokens.
+- Inputs represent payment-event state (`amount_cents`, status, and a merchant reference). Sensitive card and bank credentials are not accepted or stored.
 - Endpoint targets must be absolute `http` or `https` URLs without credentials and resolve only to publicly routable addresses. The worker revalidates DNS answers before connecting and rejects redirects. Local receivers, private networks, cloud metadata addresses, and DNS answers that mix public and private addresses are rejected.
 - Endpoint secrets are stored in SQLite in this MVP so the worker can sign deliveries. Creation is the only API response that reveals a secret; use a managed secret store and encryption at rest in a production evolution.
 - HTTPS is supported but not required for a public target. Production should require HTTPS, add egress allowlists, redact logs, and rotate secrets.
@@ -65,8 +91,8 @@ The API writes an event and its initial endpoint delivery jobs in one transactio
 
 Prerequisites: Go 1.23+ (or Docker). Configure at least one tenant API key before starting:
 
-```powershell
-$env:PAYRELAY_API_KEYS = 'merchant_demo:prk_use_a_random_value_of_at_least_20_characters'
+```bash
+export PAYRELAY_API_KEYS='merchant_demo:prk_use_a_random_value_of_at_least_20_characters'
 go run ./cmd/server
 ```
 
@@ -97,7 +123,7 @@ Run the same report locally:
 make coverage
 ```
 
-For a portfolio-ready, end-to-end walkthrough with curl payloads, expected HTTP responses, delivery history, replay behavior, and signature verification, see [the functional test runbook](docs/functional-test-runbook.md).
+For an end-to-end walkthrough with curl payloads, expected HTTP responses, delivery history, replay behavior, and signature verification, see [the functional test runbook](docs/functional-test-runbook.md).
 
 ## API examples
 
@@ -107,7 +133,9 @@ After starting the server, open [http://localhost:8080/docs/](http://localhost:8
 
 Import [`postman/PayRelay.postman_collection.json`](postman/PayRelay.postman_collection.json) into Postman to run the same local workflow with response assertions. The collection starts with the health check and persists created IDs as collection variables for the following requests.
 
-Register an endpoint with a public request-bin service or public test receiver. Local and private-network receivers are intentionally rejected:
+### Webhook endpoint registration
+
+Register a webhook endpoint with a public request-bin service or public test receiver. Local and private-network receivers are intentionally rejected:
 
 ```sh
 curl -X POST http://localhost:8080/v1/endpoints \
@@ -148,7 +176,8 @@ X-PayRelay-Signature: sha256=<hex HMAC of "timestamp.payload">
 
 - **SQLite over a broker/queue:** one executable, simple local setup, durable enough for a single-instance MVP. It is not a multi-node work queue.
 - **At-least-once delivery:** a receiver can observe a request even when the sender cannot persist the response. Deduplicate by event ID on the receiver side.
-- **Fixed retry policy:** failures retry up to `PAYRELAY_MAX_ATTEMPTS` (default five). Delivery `Retry-After`, dead-letter routing, and endpoint pause/circuit breaking are deliberately deferred.
+- **Fixed retry policy:** failures retry up to `PAYRELAY_MAX_ATTEMPTS` (default five). Delivery `Retry-After`, dead-letter routing, and endpoint pause are deliberately deferred.
+- **Endpoint circuit breaker:** consecutive receiver failures open an endpoint circuit and hold its pending deliveries for a cooldown. A successful delivery resets the failure count; this prevents a known-unhealthy receiver from consuming the worker loop.
 - **Per-tenant management limits:** authenticated `/v1` traffic is limited independently per tenant to 60 requests per fixed one-minute window by default. The limiter is process-local, so multi-instance deployments require a shared limiter before relying on it as a global control.
 - **No endpoint authentication model:** this is intentionally a local management API. An operator API or tenant auth is a necessary next step.
 
@@ -163,10 +192,12 @@ X-PayRelay-Signature: sha256=<hex HMAC of "timestamp.payload">
 | `PAYRELAY_REQUEST_TIMEOUT` | `10s` | Outbound webhook HTTP timeout |
 | `PAYRELAY_API_KEYS` | required | Comma-separated `tenant-id:api-key` pairs; API keys must be at least 20 characters |
 | `PAYRELAY_TENANT_RATE_LIMIT` | `60` | Authenticated `/v1` requests permitted per tenant in each one-minute fixed window |
+| `PAYRELAY_CIRCUIT_FAILURE_THRESHOLD` | `5` | Consecutive failed deliveries that open an endpoint circuit |
+| `PAYRELAY_CIRCUIT_COOLDOWN` | `1m` | How long pending deliveries wait while an endpoint circuit is open |
 
 ## Roadmap
 
-1. Add endpoint circuit breaking and delivery `Retry-After` handling.
+1. Add delivery `Retry-After` handling.
 2. Move secrets to a KMS-backed store; require TLS and add structured audit logs/metrics/tracing.
 3. Introduce Postgres plus a dedicated queue and shared rate limiter for horizontal workers.
 4. Add an event catalog, receiver verification SDKs, and load/fault-injection tests.

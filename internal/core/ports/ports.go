@@ -23,10 +23,19 @@ type Repository interface {
 	CreateEvent(context.Context, domain.PaymentEvent, string, []domain.Endpoint) (domain.PaymentEvent, bool, error)
 	GetEvent(context.Context, string, string) (domain.PaymentEvent, error)
 	ClaimDueDelivery(context.Context, time.Time) (domain.Delivery, domain.Endpoint, domain.PaymentEvent, bool, error)
-	RecordAttempt(context.Context, string, int, string, time.Duration, *time.Time) error
+	RecordAttempt(context.Context, string, int, string, time.Duration, *time.Time, EndpointCircuitUpdate) error
 	ListDeliveries(context.Context, string, string) ([]domain.Delivery, error)
 	ListAttempts(context.Context, string, string) ([]domain.DeliveryAttempt, error)
 	ReplayFailed(context.Context, string, string) error
+}
+
+// EndpointCircuitUpdate gives the persistence adapter the information needed
+// to atomically update an endpoint's circuit with its delivery attempt.
+type EndpointCircuitUpdate struct {
+	EndpointID       string
+	Failed           bool
+	FailureThreshold int
+	CooldownUntil    time.Time
 }
 
 // WebhookSender is the outbound delivery port. Its adapter owns transport

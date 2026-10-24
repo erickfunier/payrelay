@@ -24,7 +24,7 @@
       "event": [{ "listen": "test", "script": { "exec": ["pm.test('returns 200', function () { pm.response.to.have.status(200); });", "pm.test('reports ready', function () { pm.expect(pm.response.json().status).to.eql('ok'); });"] } }]
     },
     {
-      "name": "Create endpoint",
+      "name": "Register webhook endpoint",
       "request": {
         "method": "POST",
         "header": [{ "key": "Content-Type", "value": "application/json" }],

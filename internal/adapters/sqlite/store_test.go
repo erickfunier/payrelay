@@ -99,7 +99,7 @@ func TestStore_GivenDeliveryLifecycle_WhenAttemptsAreRecorded_ThenPersistsHistor
 	if _, err := repo.GetEvent(ctx, tenantID, "evt_missing"); !errors.Is(err, ports.ErrNotFound) {
 		t.Fatalf("missing event error = %v", err)
 	}
-	if err := repo.RecordAttempt(ctx, "dlv_missing", 500, "missing", time.Millisecond, nil); !errors.Is(err, ports.ErrNotFound) {
+	if err := repo.RecordAttempt(ctx, "dlv_missing", 500, "missing", time.Millisecond, nil, ports.EndpointCircuitUpdate{}); !errors.Is(err, ports.ErrNotFound) {
 		t.Fatalf("missing delivery attempt error = %v", err)
 	}
 	if attempts, err := repo.ListAttempts(ctx, tenantID, "dlv_missing"); err != nil || len(attempts) != 0 {
@@ -111,7 +111,7 @@ func TestStore_GivenDeliveryLifecycle_WhenAttemptsAreRecorded_ThenPersistsHistor
 		t.Fatalf("claim: delivery=%#v endpoint=%#v event=%#v found=%v err=%v", delivery, claimedEndpoint, claimedEvent, found, err)
 	}
 	retryAt := now.Add(time.Hour)
-	if err := repo.RecordAttempt(ctx, delivery.ID, 503, "receiver returned HTTP 503", 20*time.Millisecond, &retryAt); err != nil {
+	if err := repo.RecordAttempt(ctx, delivery.ID, 503, "receiver returned HTTP 503", 20*time.Millisecond, &retryAt, ports.EndpointCircuitUpdate{EndpointID: endpoint.ID, Failed: true, FailureThreshold: 5, CooldownUntil: now.Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, _, found, err := repo.ClaimDueDelivery(ctx, now.Add(time.Minute)); err != nil || found {
@@ -121,7 +121,7 @@ func TestStore_GivenDeliveryLifecycle_WhenAttemptsAreRecorded_ThenPersistsHistor
 	if err != nil || !found {
 		t.Fatalf("retry claim: found=%v err=%v", found, err)
 	}
-	if err := repo.RecordAttempt(ctx, delivery.ID, 204, "", 5*time.Millisecond, nil); err != nil {
+	if err := repo.RecordAttempt(ctx, delivery.ID, 204, "", 5*time.Millisecond, nil, ports.EndpointCircuitUpdate{EndpointID: endpoint.ID}); err != nil {
 		t.Fatal(err)
 	}
 	deliveries, err := repo.ListDeliveries(ctx, tenantID, event.ID)
@@ -141,7 +141,7 @@ func TestStore_GivenDeliveryLifecycle_WhenAttemptsAreRecorded_ThenPersistsHistor
 	if err != nil || !found {
 		t.Fatalf("failed claim: found=%v err=%v", found, err)
 	}
-	if err := repo.RecordAttempt(ctx, failedDelivery.ID, 500, "receiver returned HTTP 500", time.Millisecond, nil); err != nil {
+	if err := repo.RecordAttempt(ctx, failedDelivery.ID, 500, "receiver returned HTTP 500", time.Millisecond, nil, ports.EndpointCircuitUpdate{EndpointID: endpoint.ID, Failed: true, FailureThreshold: 5, CooldownUntil: now.Add(time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	if err := repo.ReplayFailed(ctx, tenantID, failedDelivery.ID); err != nil {
@@ -149,6 +149,46 @@ func TestStore_GivenDeliveryLifecycle_WhenAttemptsAreRecorded_ThenPersistsHistor
 	}
 	if err := repo.ReplayFailed(ctx, tenantID, "dlv_missing"); !errors.Is(err, ports.ErrNotFound) {
 		t.Fatalf("missing replay error = %v", err)
+	}
+}
+
+func TestStore_GivenOpenEndpointCircuit_WhenClaimingDueDelivery_ThenHoldsWorkUntilCooldownEnds(t *testing.T) {
+	const tenantID = "merchant_alpha"
+	repo, err := Open(filepath.Join(t.TempDir(), "payrelay.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	endpoint := domain.Endpoint{TenantID: tenantID, ID: "we_circuit", URL: "https://example.test/circuit", Secret: "whsec_circuit", Active: true, CreatedAt: now, UpdatedAt: now}
+	if err := repo.CreateEndpoint(ctx, endpoint); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"evt_circuit_first", "evt_circuit_second"} {
+		event := domain.PaymentEvent{TenantID: tenantID, ID: id, Type: "payment.failed", MerchantRef: id, AmountCents: 100, Currency: "USD", Status: "failed", OccurredAt: now}
+		if _, _, err := repo.CreateEvent(ctx, event, id, []domain.Endpoint{endpoint}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	delivery, _, _, found, err := repo.ClaimDueDelivery(ctx, now.Add(time.Second))
+	if err != nil || !found {
+		t.Fatalf("initial claim: found=%v err=%v", found, err)
+	}
+	cooldownUntil := now.Add(time.Minute)
+	if err := repo.RecordAttempt(ctx, delivery.ID, 503, "unavailable", time.Millisecond, nil, ports.EndpointCircuitUpdate{EndpointID: endpoint.ID, Failed: true, FailureThreshold: 1, CooldownUntil: cooldownUntil}); err != nil {
+		t.Fatal(err)
+	}
+
+	stored, err := repo.GetEndpoint(ctx, tenantID, endpoint.ID)
+	if err != nil || stored.ConsecutiveFailures != 1 || !stored.CircuitOpenUntil.Equal(cooldownUntil.Truncate(time.Second)) {
+		t.Fatalf("circuit state: %#v (%v)", stored, err)
+	}
+	if _, _, _, found, err := repo.ClaimDueDelivery(ctx, now.Add(2*time.Second)); err != nil || found {
+		t.Fatalf("open circuit claimed delivery: found=%v err=%v", found, err)
+	}
+	if _, _, _, found, err := repo.ClaimDueDelivery(ctx, cooldownUntil.Add(time.Second)); err != nil || !found {
+		t.Fatalf("cooled circuit did not claim delivery: found=%v err=%v", found, err)
 	}
 }
 
