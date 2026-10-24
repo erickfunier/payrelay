@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: PayRelay API
   version: 1.0.0
-  description: Mock payment-event webhook delivery service. It never processes real payments or accepts card data.
+  description: Mock payment-event webhook delivery service. It never processes real payments or accepts card data. Authenticated /v1 requests are limited independently per tenant; see 429 responses and rate-limit headers.
 servers:
   - url: /
     description: The server hosting this Swagger UI instance
@@ -28,6 +28,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EndpointList' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
     post:
       summary: Register a webhook endpoint
       description: Target URLs must use HTTP(S), omit URL credentials, and resolve exclusively to publicly routable IP addresses. Loopback, private, link-local, multicast, documentation, and mixed public/private DNS answers are rejected. Deliveries revalidate DNS immediately before connecting and do not follow redirects.
@@ -43,6 +44,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Endpoint' }
         '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
   /v1/endpoints/{endpointID}:
     get:
       summary: Get a webhook endpoint
@@ -54,6 +56,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Endpoint' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
     patch:
       summary: Enable or disable a webhook endpoint
       parameters: [{ $ref: '#/components/parameters/EndpointID' }]
@@ -70,6 +73,7 @@ paths:
               schema: { $ref: '#/components/schemas/Endpoint' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
   /v1/endpoints/{endpointID}/rotate-secret:
     post:
       summary: Rotate a webhook signing secret
@@ -81,6 +85,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Endpoint' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
   /v1/events:
     post:
       summary: Create a mock payment event
@@ -107,6 +112,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
   /v1/events/{eventID}:
     get:
       summary: Get a mock event
@@ -118,6 +124,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/PaymentEvent' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
   /v1/events/{eventID}/deliveries:
     get:
       summary: List delivery jobs for an event
@@ -129,6 +136,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/DeliveryList' }
         '404': { $ref: '#/components/responses/NotFound' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
   /v1/deliveries/{deliveryID}/attempts:
     get:
       summary: List attempts for a delivery
@@ -139,6 +147,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AttemptList' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
   /v1/deliveries/{deliveryID}/replay:
     post:
       summary: Queue a failed delivery for replay
@@ -154,6 +163,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Error' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
 components:
   securitySchemes:
     bearerAuth:
@@ -195,6 +205,24 @@ components:
           schema: { $ref: '#/components/schemas/Error' }
     NotFound:
       description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    TooManyRequests:
+      description: Tenant quota exhausted. Retry after the number of seconds in the Retry-After header.
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying.
+          schema: { type: integer, minimum: 1 }
+        X-RateLimit-Limit:
+          description: Requests permitted in this tenant's fixed window.
+          schema: { type: integer }
+        X-RateLimit-Remaining:
+          description: Requests remaining in this tenant's current window.
+          schema: { type: integer, minimum: 0 }
+        X-RateLimit-Reset:
+          description: Unix timestamp when this tenant's quota resets.
+          schema: { type: integer, format: int64 }
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }

@@ -12,11 +12,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/example/payrelay/internal/adapters/sqlite"
 	"github.com/example/payrelay/internal/adapters/webhook"
 	"github.com/example/payrelay/internal/core/application"
 	"github.com/example/payrelay/internal/core/domain"
+	"github.com/example/payrelay/internal/security/ratelimit"
 	"github.com/example/payrelay/internal/security/webhooktarget"
 )
 
@@ -226,6 +228,30 @@ func TestAPI_GivenMissingOrInvalidCredentials_WhenManagingResources_ThenRejectsR
 	}
 }
 
+func TestAPI_GivenTenantQuota_WhenManagementRequestsExceedIt_ThenReturnsRateLimitResponse(t *testing.T) {
+	now := time.Now()
+	limiter := ratelimit.NewTenantLimiterWithClock(2, time.Minute, func() time.Time { return now })
+	handler, _ := testServerWithDependencies(t, allowEndpointTargetValidator{}, limiter)
+
+	first := request(t, handler, http.MethodGet, "/v1/endpoints", "", nil)
+	if first.Code != http.StatusOK || first.Header().Get("X-RateLimit-Remaining") != "1" {
+		t.Fatalf("first response = %d, remaining = %q", first.Code, first.Header().Get("X-RateLimit-Remaining"))
+	}
+	second := request(t, handler, http.MethodGet, "/v1/endpoints", "", nil)
+	if second.Code != http.StatusOK || second.Header().Get("X-RateLimit-Remaining") != "0" {
+		t.Fatalf("second response = %d, remaining = %q", second.Code, second.Header().Get("X-RateLimit-Remaining"))
+	}
+	rejected := request(t, handler, http.MethodGet, "/v1/endpoints", "", nil)
+	if rejected.Code != http.StatusTooManyRequests || rejected.Header().Get("Retry-After") == "" || !strings.Contains(rejected.Body.String(), "rate limit exceeded") {
+		t.Fatalf("rejected response = %d, headers = %#v, body = %s", rejected.Code, rejected.Header(), rejected.Body.String())
+	}
+
+	beta := requestAs(t, handler, "prk_beta_0123456789abcdef01234567890", http.MethodGet, "/v1/endpoints", "", nil)
+	if beta.Code != http.StatusOK || beta.Header().Get("X-RateLimit-Remaining") != "1" {
+		t.Fatalf("beta response = %d, remaining = %q", beta.Code, beta.Header().Get("X-RateLimit-Remaining"))
+	}
+}
+
 func TestAPI_GivenTwoTenants_WhenResourcesAreRequestedAcrossBoundary_ThenTheyAreHidden(t *testing.T) {
 	handler, _ := testServer(t)
 	created := requestAs(t, handler, "prk_alpha_0123456789abcdef0123456789", http.MethodPost, "/v1/endpoints", `{"url":"https://alpha.example.test/webhooks"}`, nil)
@@ -361,6 +387,10 @@ func testServer(t *testing.T) (http.Handler, *application.Service) {
 }
 
 func testServerWithTargetValidator(t *testing.T, targets EndpointTargetValidator) (http.Handler, *application.Service) {
+	return testServerWithDependencies(t, targets, nil)
+}
+
+func testServerWithDependencies(t *testing.T, targets EndpointTargetValidator, limits TenantRateLimiter) (http.Handler, *application.Service) {
 	t.Helper()
 	repo, err := sqlite.Open(filepath.Join(t.TempDir(), "payrelay.db"))
 	if err != nil {
@@ -373,10 +403,7 @@ func testServerWithTargetValidator(t *testing.T, targets EndpointTargetValidator
 	if err != nil {
 		t.Fatal(err)
 	}
-	if targets == nil {
-		return NewServer(service, logger, authenticator), service
-	}
-	return NewServerWithTargetValidator(service, logger, authenticator, targets), service
+	return NewServerWithDependencies(service, logger, authenticator, targets, limits), service
 }
 
 type allowEndpointTargetValidator struct{}
