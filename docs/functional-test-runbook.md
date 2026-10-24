@@ -57,7 +57,7 @@ HTTP/1.1 200 OK
 
 The `429` response includes `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset`. Stop this small-quota server and restart it with the normal command in section 1 before continuing the runbook.
 
-## 2. Register a test receiver
+## 2. Webhook endpoint registration
 
 Set `RECEIVER_URL` to a **publicly routable** HTTP request inspector or test receiver that returns `2xx`. Localhost, private-network addresses, cloud metadata addresses, and hostnames that resolve to any of them are rejected. Never paste an endpoint secret into a public request inspector's notes.
 

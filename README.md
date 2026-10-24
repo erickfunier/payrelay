@@ -26,7 +26,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for branch names, review expectations, an
 
 ## Phase 2: security foundation
 
-- Bearer API-key authentication for every management endpoint under `/v1`.
+- API key authentication for every management endpoint under `/v1`, supplied through the `Authorization: Bearer` header.
 - Tenant isolation: endpoints, events, idempotency keys, delivery history, and replay operations are scoped to the authenticated tenant.
 - API keys are configured through `PAYRELAY_API_KEYS`, retained only as SHA-256 digests in process memory, and compared in constant time.
 - Existing SQLite installations are migrated safely; pre-Phase-2 data is assigned to the `legacy` tenant and is not exposed to configured tenants.
@@ -105,7 +105,9 @@ After starting the server, open [http://localhost:8080/docs/](http://localhost:8
 
 Import [`postman/PayRelay.postman_collection.json`](postman/PayRelay.postman_collection.json) into Postman to run the same local workflow with response assertions. The collection starts with the health check and persists created IDs as collection variables for the following requests.
 
-Register an endpoint with a public request-bin service or public test receiver. Local and private-network receivers are intentionally rejected:
+### Webhook endpoint registration
+
+Register a webhook endpoint with a public request-bin service or public test receiver. Local and private-network receivers are intentionally rejected:
 
 ```sh
 curl -X POST http://localhost:8080/v1/endpoints \
