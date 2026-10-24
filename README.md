@@ -1,6 +1,34 @@
 # PayRelay
 
-PayRelay creates payment events and delivers signed webhook notifications to merchant endpoints.
+PayRelay is a webhook delivery platform for payment-event integrations. An application submits a payment event, and PayRelay distributes a signed notification to each configured merchant endpoint.
+
+## What PayRelay does
+
+Payment systems often need to notify other systems when an order is paid, fails, or changes state. PayRelay is the reliable delivery layer between the application that knows about the payment event and the systems that need to react to it, such as an order service, ERP, or merchant backend.
+
+```text
+Application                PayRelay                              Merchant system
+    │                         │                                        │
+    │  1. Register webhook    │                                        │
+    │────────────────────────>│                                        │
+    │  endpoint + API key     │                                        │
+    │                         │                                        │
+    │  2. Submit payment event│                                        │
+    │────────────────────────>│  stores event + delivery job           │
+    │                         │───────────────────────────────────────>│
+    │                         │  3. Signed webhook notification        │
+    │                         │<───────────────────────────────────────│
+    │                         │  4. HTTP result; retry when necessary  │
+```
+
+In practice, an integration follows four steps:
+
+1. A tenant authenticates with an API key and registers a **webhook endpoint**.
+2. PayRelay returns an endpoint ID and a one-time signing secret.
+3. The tenant submits a `payment.*` event with an idempotency key.
+4. A background worker sends an HMAC-signed webhook, records every attempt, retries failures, and temporarily opens a circuit for persistently unhealthy endpoints.
+
+The service provides tenant isolation, durable at-least-once delivery, request idempotency, HMAC-signed notifications, delivery history, replay for failed deliveries, per-tenant API rate limits, and endpoint circuit breaking.
 
 ## Development workflow
 
@@ -13,7 +41,7 @@ This public repository uses a two-stage Git flow:
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for branch names, review expectations, and the release process.
 
-## What Phase 1 delivers
+## Core capabilities
 
 - Create merchant webhook endpoints, each with a generated signing secret.
 - Create mock `payment.*` events and persist them in SQLite.
@@ -40,7 +68,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for branch names, review expectations, an
 
 ## Security model
 
-- Inputs represent fictional payment state (`amount_cents`, status, and a merchant reference), never PANs, CVVs, bank credentials, or real transaction tokens.
+- Inputs represent payment-event state (`amount_cents`, status, and a merchant reference). Sensitive card and bank credentials are not accepted or stored.
 - Endpoint targets must be absolute `http` or `https` URLs without credentials and resolve only to publicly routable addresses. The worker revalidates DNS answers before connecting and rejects redirects. Local receivers, private networks, cloud metadata addresses, and DNS answers that mix public and private addresses are rejected.
 - Endpoint secrets are stored in SQLite in this MVP so the worker can sign deliveries. Creation is the only API response that reveals a secret; use a managed secret store and encryption at rest in a production evolution.
 - HTTPS is supported but not required for a public target. Production should require HTTPS, add egress allowlists, redact logs, and rotate secrets.
@@ -63,8 +91,8 @@ The API writes an event and its initial endpoint delivery jobs in one transactio
 
 Prerequisites: Go 1.23+ (or Docker). Configure at least one tenant API key before starting:
 
-```powershell
-$env:PAYRELAY_API_KEYS = 'merchant_demo:prk_use_a_random_value_of_at_least_20_characters'
+```bash
+export PAYRELAY_API_KEYS='merchant_demo:prk_use_a_random_value_of_at_least_20_characters'
 go run ./cmd/server
 ```
 
@@ -95,7 +123,7 @@ Run the same report locally:
 make coverage
 ```
 
-For a portfolio-ready, end-to-end walkthrough with curl payloads, expected HTTP responses, delivery history, replay behavior, and signature verification, see [the functional test runbook](docs/functional-test-runbook.md).
+For an end-to-end walkthrough with curl payloads, expected HTTP responses, delivery history, replay behavior, and signature verification, see [the functional test runbook](docs/functional-test-runbook.md).
 
 ## API examples
 
