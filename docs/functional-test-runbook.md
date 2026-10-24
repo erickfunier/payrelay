@@ -4,23 +4,15 @@ This guide demonstrates the complete mock-only PayRelay flow with real HTTP requ
 
 ## 1. Start PayRelay
 
-In one terminal, start the API. Setting one attempt makes the failed-delivery example deterministic. Configure a local tenant and API key; all management requests except `/healthz` require it.
+In one Bash terminal, start the API. Setting one attempt makes the failed-delivery example deterministic. Configure a local tenant and API key; all management requests except `/healthz` require it.
 
-```sh
+```bash
 PAYRELAY_MAX_ATTEMPTS=1 PAYRELAY_API_KEYS=merchant_demo:prk_local_demo_key_0123456789,merchant_other:prk_other_demo_key_0123456789 go run ./cmd/server
-```
-
-On PowerShell:
-
-```powershell
-$env:PAYRELAY_MAX_ATTEMPTS = "1"
-$env:PAYRELAY_API_KEYS = "merchant_demo:prk_local_demo_key_0123456789,merchant_other:prk_other_demo_key_0123456789"
-go run ./cmd/server
 ```
 
 Verify the service in a second terminal:
 
-```sh
+```bash
 curl -i http://localhost:8080/healthz
 ```
 
@@ -37,16 +29,16 @@ Content-Type: application/json
 
 For this optional check, stop the normal run and restart with a deliberately small quota of three management requests per tenant per minute. The response includes the quota headers; a fourth request with the same API key returns `429`, while another tenant remains independent.
 
-```sh
+```bash
 PAYRELAY_MAX_ATTEMPTS=1 PAYRELAY_TENANT_RATE_LIMIT=3 PAYRELAY_API_KEYS=merchant_demo:prk_local_demo_key_0123456789,merchant_other:prk_other_demo_key_0123456789 go run ./cmd/server
 ```
 
-```sh
+```bash
 export API_KEY="prk_local_demo_key_0123456789"
 export OTHER_API_KEY="prk_other_demo_key_0123456789"
 ```
 
-```sh
+```bash
 for request in 1 2 3 4; do
   curl -si http://localhost:8080/v1/endpoints -H "Authorization: Bearer ${API_KEY}" | head -n 1
 done
@@ -69,7 +61,7 @@ The `429` response includes `Retry-After`, `X-RateLimit-Limit`, `X-RateLimit-Rem
 
 Set `RECEIVER_URL` to a **publicly routable** HTTP request inspector or test receiver that returns `2xx`. Localhost, private-network addresses, cloud metadata addresses, and hostnames that resolve to any of them are rejected. Never paste an endpoint secret into a public request inspector's notes.
 
-```sh
+```bash
 export RECEIVER_URL="https://your-test-receiver.example/webhooks/payrelay"
 curl -i -X POST http://localhost:8080/v1/endpoints \
   -H "Authorization: Bearer ${API_KEY}" \
@@ -95,7 +87,7 @@ Save the returned secret securely. PayRelay returns it only at endpoint creation
 
 The registration boundary rejects unsafe targets before it stores an endpoint or performs an outbound request:
 
-```sh
+```bash
 curl -i -X POST http://localhost:8080/v1/endpoints \
   -H "Authorization: Bearer ${API_KEY}" \
   -H 'Content-Type: application/json' \
@@ -119,7 +111,7 @@ Set `ENDPOINT_ID` and `FIRST_SECRET` from the response in step 2. The following 
 
 First, verify that a normal retrieval redacts the secret:
 
-```sh
+```bash
 export ENDPOINT_ID="we_84fa..."
 export FIRST_SECRET="whsec_7bf..."
 curl -s -H "Authorization: Bearer ${API_KEY}" \
@@ -130,7 +122,7 @@ Expected response: `200 OK`, with the endpoint's `id`, `url`, and `active` state
 
 Disable the endpoint, then confirm the update:
 
-```sh
+```bash
 curl -i -X PATCH "http://localhost:8080/v1/endpoints/${ENDPOINT_ID}" \
   -H "Authorization: Bearer ${API_KEY}" \
   -H 'Content-Type: application/json' \
@@ -145,7 +137,7 @@ Expected response (`200 OK`):
 
 The collection endpoint keeps disabled records visible while continuing to redact secrets:
 
-```sh
+```bash
 curl -s -H "Authorization: Bearer ${API_KEY}" http://localhost:8080/v1/endpoints
 ```
 
@@ -153,7 +145,7 @@ Expected result: `data` contains `ENDPOINT_ID` with `"active":false` and no `sec
 
 Create an event while the endpoint is disabled, set `DISABLED_EVENT_ID` from the response, and inspect its deliveries:
 
-```sh
+```bash
 curl -s -X POST http://localhost:8080/v1/events \
   -H "Authorization: Bearer ${API_KEY}" \
   -H 'Content-Type: application/json' \
@@ -167,7 +159,7 @@ curl -s -H "Authorization: Bearer ${API_KEY}" \
 
 Expected result: `{"data":[]}`. Re-enable the endpoint before continuing the normal delivery flow:
 
-```sh
+```bash
 curl -i -X PATCH "http://localhost:8080/v1/endpoints/${ENDPOINT_ID}" \
   -H "Authorization: Bearer ${API_KEY}" \
   -H 'Content-Type: application/json' \
@@ -176,14 +168,14 @@ curl -i -X PATCH "http://localhost:8080/v1/endpoints/${ENDPOINT_ID}" \
 
 Rotate the signing secret. The response contains a new `whsec_...` value that must differ from `FIRST_SECRET`; save it as the receiver's new secret. A subsequent `GET /v1/endpoints/${ENDPOINT_ID}` must again omit the `secret` field.
 
-```sh
+```bash
 curl -i -X POST "http://localhost:8080/v1/endpoints/${ENDPOINT_ID}/rotate-secret" \
   -H "Authorization: Bearer ${API_KEY}"
 ```
 
 Finally, prove tenant isolation. A valid API key for another tenant must not reveal or modify this endpoint:
 
-```sh
+```bash
 curl -i -H "Authorization: Bearer ${OTHER_API_KEY}" \
   "http://localhost:8080/v1/endpoints/${ENDPOINT_ID}"
 ```
@@ -194,7 +186,7 @@ Expected response: `404 Not Found` with `{"error":"not found"}`.
 
 The `Idempotency-Key` makes client retries safe. The example contains only fictional order data and an amount in minor units.
 
-```sh
+```bash
 curl -i -X POST http://localhost:8080/v1/events \
   -H "Authorization: Bearer ${API_KEY}" \
   -H 'Content-Type: application/json' \
@@ -244,7 +236,7 @@ X-PayRelay-Signature: sha256=4d1...
 
 Use the event ID returned in step 4:
 
-```sh
+```bash
 curl -s -H "Authorization: Bearer ${API_KEY}" http://localhost:8080/v1/events/evt_2db.../deliveries
 ```
 
@@ -263,7 +255,7 @@ Expected result after a `2xx` receiver response:
 
 Then inspect the immutable attempt record:
 
-```sh
+```bash
 curl -s -H "Authorization: Bearer ${API_KEY}" http://localhost:8080/v1/deliveries/dlv_a91.../attempts
 ```
 
@@ -294,7 +286,7 @@ Register a second test receiver that deliberately returns `500`, then create ano
 
 Queue it again after fixing the receiver:
 
-```sh
+```bash
 curl -i -X POST http://localhost:8080/v1/deliveries/dlv_failed.../replay \
   -H "Authorization: Bearer ${API_KEY}"
 ```
